@@ -70,3 +70,16 @@ button{touch-action:manipulation;min-height:52px}
 }
 @media (max-height:480px){.sc{height:calc(100dvh - 190px);min-height:200px}.q{font-size:18px}}
 @media (min-width:760px){.src{font-size:15px}.hint{font-size:15px}}
+
+#ref{display:none}
+body.refopen #ref{display:flex;flex-direction:column;position:fixed;z-index:5;background:var(--bg);border:1px solid var(--line);inset:auto 0 0 0;height:78dvh;border-radius:16px 16px 0 0;padding-bottom:env(safe-area-inset-bottom);box-shadow:0 -8px 30px rgba(0,0,0,.35)}
+.rbar{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line);gap:8px}
+.rbtns{display:flex;gap:6px}.rbtns button{min-width:44px}
+.rbody{flex:1;overflow:auto;padding:8px;background:#6b7280;-webkit-overflow-scrolling:touch}
+.rbody canvas{display:block;margin:0 auto;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+.rbody .card,.rbody .note{background:var(--card);color:var(--fg)}
+@media (min-width:1000px){
+  body.refopen #ref{inset:0 0 0 auto;width:52vw;height:auto;border-radius:0;border-width:0 0 0 1px;box-shadow:none;padding-top:env(safe-area-inset-top)}
+  body.refopen header,body.refopen main{margin-right:52vw;max-width:none}
+  body.refopen #tabs{max-width:none}
+}

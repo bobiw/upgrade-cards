@@ -78,7 +78,7 @@ function head(c) {
   return `<div class="meta"><span class="tag">${esc(c.topic)}</span>${c.review === 'draft' ? '<span class="tag draft">DRAFT</span>' : ''}${c.weak ? '<span class="tag">weak area</span>' : ''}</div>`;
 }
 function srcBlock(c) {
-  return `<div class="src">[${esc(c.cite)}] · ${esc(c.src)} ${esc(deck.meta.revs?.[c.src] || '')}${c.quotes?.length ? `<q>${esc(c.quotes.join(' … '))}</q>` : ''}${c.note ? `<div style="margin-top:6px">${esc(c.note)}</div>` : ''}</div>`;
+  return `<div class="src">[${esc(c.cite)}] · ${esc(c.src)} ${esc(deck.meta.revs?.[c.src] || '')} <button class="small" data-open="${esc(c.src)}:${c.page}">Open page ${c.page}</button>${c.quotes?.length ? `<q>${esc(c.quotes.join(' … '))}</q>` : ''}${c.note ? `<div style="margin-top:6px">${esc(c.note)}</div>` : ''}</div>`;
 }
 const gradeBtns = sug => [[1, 'Again'], [2, 'Hard'], [3, 'Good'], [4, 'Easy']]
   .map(([g, l]) => `<button class="g${g}${sug === g ? ' sug' : ''}" data-g="${g}">${l}</button>`).join('');
@@ -143,7 +143,7 @@ function rSwipe(c, front, back) {
   const grade = g => { if (busy) return; busy = true; dr.style.transition = 'transform .22s, opacity .22s'; dr.style.transform = `translateX(${g === 3 ? 140 : -140}%) rotate(${g === 3 ? 18 : -18}deg)`; dr.style.opacity = 0; setTimeout(() => done(c, g), 200); };
   S.cur = { flip: () => sc.classList.toggle('flipped'), grade };
   $('#bx').onclick = () => grade(1); $('#bo').onclick = () => grade(3);
-  dr.onpointerdown = e => { x0 = e.clientX; y0 = e.clientY; dx = 0; moved = false; dr.style.transition = 'none'; try { dr.setPointerCapture(e.pointerId); } catch (_) {} };
+  dr.onpointerdown = e => { if (e.target.closest('button')) return; x0 = e.clientX; y0 = e.clientY; dx = 0; moved = false; dr.style.transition = 'none'; try { dr.setPointerCapture(e.pointerId); } catch (_) {} };
   dr.onpointermove = e => {
     if (x0 === null) return; dx = e.clientX - x0;
     if (!moved && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(e.clientY - y0)) moved = true;
@@ -242,6 +242,10 @@ function viewSettings() {
   const dr = deck.cards.filter(c => c.review === 'draft').length;
   $('#main').innerHTML = `<div class="card"><b>Deck</b><p class="note">${deck.cards.length} cards (${dr} draft) · built ${esc(deck.meta.built || 'never')}<br>${esc(Object.entries(deck.meta.revs || {}).map(([k, v]) => k + ' ' + v).join(' · '))}</p>
     <label for="df">Load deck file (deck.json)</label><input type="file" id="df" accept=".json,application/json"></div>
+    <div class="card"><b>Manuals (for the side-by-side page viewer)</b>
+    <p class="note" id="mst">Checking…</p>
+    <label for="mf">Load manual PDFs (POH, QRH, FOM, PRM, OpsSpecs)</label><input type="file" id="mf" accept=".pdf,application/pdf" multiple>
+    <p class="note">Stored only on this device. Nothing is uploaded.</p></div>
     <div class="card"><b>Study</b>
     <label for="cd">Check date</label><input type="date" id="cd" value="${esc(settings.checkDate)}">
     <p class="note">Review gaps are capped at half the days left, so nothing is scheduled past the check.</p>
@@ -262,6 +266,8 @@ function viewSettings() {
   $('#np').onchange = e => { settings.newPerDay = Math.max(0, +e.target.value || 0); kvSet('settings', settings); };
   $('#hd').onchange = e => { settings.hideDrafts = e.target.checked; kvSet('settings', settings); };
   $('#ex').onclick = exportProgress;
+  manualStatus().then(h => { const el = $('#mst'); if (el) el.innerHTML = h; });
+  $('#mf').onchange = async e => { const el = $('#mst'); for (const f of e.target.files) { const k = manualKey(f.name); if (!k) { el.textContent = 'Not recognised: ' + f.name; continue; } el.textContent = 'Saving ' + k + '…'; await kvSet('pdf:' + k, await f.arrayBuffer()); delete docs[k]; } el.innerHTML = await manualStatus(); };
   $('#pf').onchange = async e => {
     try {
       const d = JSON.parse(await e.target.files[0].text()), have = new Set(events.map(x => x.id));
@@ -278,6 +284,54 @@ async function exportProgress() {
   if (navigator.canShare?.({ files: [f] })) { try { await navigator.share({ files: [f] }); return; } catch (e) { if (e.name === 'AbortError') return; } }
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click();
 }
+
+
+// ---------- reference viewer (pdf.js, manuals kept in IndexedDB on this device) ----------
+const MANUALS = ['POH', 'QRH', 'FOM', 'PRM', 'OPSSPECS'];
+const docs = {};
+const manualKey = n => /ops.?specs/i.test(n) ? 'OPSSPECS' : /PRM/i.test(n) ? 'PRM' : /QRH/i.test(n) ? 'QRH' : /FOM/i.test(n) ? 'FOM' : /POH/i.test(n) ? 'POH' : null;
+async function manualStatus() {
+  const out = [];
+  for (const k of MANUALS) { const b = await kvGet('pdf:' + k); out.push(`${b ? '✓' : '–'} ${k}${b ? ' (' + (b.byteLength / 1048576).toFixed(1) + ' MB)' : ''}`); }
+  return out.join(' &nbsp; ');
+}
+async function getDoc(src) {
+  if (docs[src]) return docs[src];
+  const buf = await kvGet('pdf:' + src); if (!buf) return null;
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'lib/pdf.worker.min.js';
+  return docs[src] = await pdfjsLib.getDocument({ data: buf.slice(0) }).promise;
+}
+let ref = null; // {src, page, zoom}
+function ensurePdfLib() {
+  return window.pdfjsLib ? Promise.resolve() : new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'lib/pdf.min.js'; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
+}
+function openRef(src, page) {
+  ref = { src, page: +page, zoom: 1 }; document.body.classList.add('refopen'); renderRef();
+}
+function closeRef() { ref = null; document.body.classList.remove('refopen'); const r = $('#ref'); if (r) r.innerHTML = ''; }
+async function renderRef() {
+  if (!ref) return;
+  const el = $('#ref'), { src, page } = ref;
+  el.innerHTML = `<div class="rbar"><b>${esc(src)} p.${page}<span id="rn" class="muted"></span></b><span class="rbtns"><button class="small" id="rp">‹</button><button class="small" id="rx">›</button><button class="small" id="rz1">−</button><button class="small" id="rz2">+</button><button class="small" id="rc">✕</button></span></div><div class="rbody" id="rb"><div class="note">Loading…</div></div>`;
+  $('#rc').onclick = closeRef;
+  try {
+    await ensurePdfLib(); const doc = await getDoc(src);
+    if (!doc) { $('#rb').innerHTML = `<div class="card"><p>The ${esc(src)} PDF is not loaded on this device.</p><label>Load it now</label><input type="file" id="lf" accept=".pdf,application/pdf"></div>`; $('#lf').onchange = async e => { const f = e.target.files[0]; if (f) { await kvSet('pdf:' + src, await f.arrayBuffer()); delete docs[src]; renderRef(); } }; return; }
+    const n = doc.numPages; ref.page = Math.min(Math.max(1, ref.page), n);
+    $('#rn').textContent = ` / ${n}`;
+    $('#rp').onclick = () => { ref.page--; renderRef(); }; $('#rx').onclick = () => { ref.page++; renderRef(); };
+    $('#rz1').onclick = () => { ref.zoom = Math.max(.5, ref.zoom - .25); renderRef(); }; $('#rz2').onclick = () => { ref.zoom = Math.min(3, ref.zoom + .25); renderRef(); };
+    const pg = await doc.getPage(ref.page), body = $('#rb'), w = body.clientWidth - 16;
+    const base = pg.getViewport({ scale: 1 }), scale = w / base.width * ref.zoom, vp = pg.getViewport({ scale }), r = window.devicePixelRatio || 1;
+    const cv = document.createElement('canvas'); cv.width = vp.width * r; cv.height = vp.height * r; cv.style.width = vp.width + 'px'; cv.style.height = vp.height + 'px';
+    body.innerHTML = ''; body.appendChild(cv);
+    await pg.render({ canvasContext: cv.getContext('2d'), viewport: vp, transform: r !== 1 ? [r, 0, 0, r, 0, 0] : null }).promise;
+    $('#rb').scrollTop = 0;
+  } catch (err) { $('#rb').innerHTML = `<div class="card">Could not show the page: ${esc(err.message)}</div>`; }
+}
+document.addEventListener('click', e => { const b = e.target.closest('[data-open]'); if (b) { const [s, p] = b.dataset.open.split(':'); openRef(s, p); } });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && ref) closeRef(); if (ref && (e.key === '[' || e.key === ']')) { ref.page += e.key === ']' ? 1 : -1; renderRef(); } });
+let rsz; window.addEventListener('resize', () => { clearTimeout(rsz); rsz = setTimeout(renderRef, 250); });
 
 // ---------- boot ----------
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.dataset.tab));
