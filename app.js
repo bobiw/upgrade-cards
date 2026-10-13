@@ -101,7 +101,7 @@ function viewStudy() {
     $('#main').innerHTML = `<div class="card"><div class="q">Session done</div><p class="muted">${S.done} answers.</p><button class="pri" id="fin">Back</button></div>`;
     $('#fin').onclick = () => { S = null; viewStudy(); }; return;
   }
-  const c = S.queue[S.i]; S.t0 = Date.now(); S.shown = false; S.errors = 0; S.pos = 0;
+  S.cur = null; const c = S.queue[S.i]; S.t0 = Date.now(); S.shown = false; S.errors = 0; S.pos = 0;
   const prog = `<div class="prog"><i style="width:${S.i / S.queue.length * 100}%"></i></div>`;
   const body = { flip: rFlip, cloze: rCloze, mc: rMc, typed: rTyped, steps: rSteps }[c.type] || rFlip;
   $('#main').innerHTML = prog + `<div class="card" id="cc">${head(c)}</div><div id="ctl"></div>`;
@@ -128,16 +128,42 @@ function gradePanel(c, sug) {
   $('#ctl').querySelectorAll('[data-g]').forEach(b => b.onclick = () => done(c, +b.dataset.g));
   wireFlag(c);
 }
-function rFlip(c) {
-  $('#cc').insertAdjacentHTML('beforeend', `<div class="q">${esc(c.q)}</div>`);
-  $('#ctl').innerHTML = `<button class="pri" style="width:100%" id="sh">Show answer</button>`;
-  $('#sh').onclick = () => { reveal(c, `<div class="a">${esc(c.a)}</div>`); gradePanel(c); };
+function rFlip(c) { rSwipe(c, `<div class="q">${esc(c.q)}</div>`, `<div class="q">${esc(c.a)}</div>`); }
+function rCloze(c) { rSwipe(c, `<div class="q">${cloze(c.q, false)}</div>`, `<div class="q">${cloze(c.q, true)}</div>`); }
+// flip card: tap to flip, swipe right = correct, swipe left = incorrect (buttons and arrow keys too)
+function rSwipe(c, front, back) {
+  const cc = $('#cc'); cc.className = 'plain';
+  cc.innerHTML = `<div class="drag" id="dr"><div class="sc" id="sc">
+    <div class="face front">${head(c)}${front}<div class="hint">Tap to flip</div></div>
+    <div class="face back">${head(c)}${back}${srcBlock(c)}</div></div><div class="tint" id="tint"></div></div>`;
+  $('#ctl').innerHTML = `<div class="row"><button class="g1" id="bx">✗ Missed</button><button class="g3" id="bo">✓ Got it</button></div><p class="note" style="text-align:center;margin:8px 0">Swipe right ✓ · swipe left ✗<span class="kbd">Keyboard: Space flips · → correct · ← missed</span></p>${flagBtn(c)}`;
+  wireFlag(c);
+  const dr = $('#dr'), sc = $('#sc'), tint = $('#tint');
+  let x0 = null, y0 = 0, dx = 0, moved = false, busy = false;
+  const grade = g => { if (busy) return; busy = true; dr.style.transition = 'transform .22s, opacity .22s'; dr.style.transform = `translateX(${g === 3 ? 140 : -140}%) rotate(${g === 3 ? 18 : -18}deg)`; dr.style.opacity = 0; setTimeout(() => done(c, g), 200); };
+  S.cur = { flip: () => sc.classList.toggle('flipped'), grade };
+  $('#bx').onclick = () => grade(1); $('#bo').onclick = () => grade(3);
+  dr.onpointerdown = e => { x0 = e.clientX; y0 = e.clientY; dx = 0; moved = false; dr.style.transition = 'none'; try { dr.setPointerCapture(e.pointerId); } catch (_) {} };
+  dr.onpointermove = e => {
+    if (x0 === null) return; dx = e.clientX - x0;
+    if (!moved && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(e.clientY - y0)) moved = true;
+    if (!moved) return;
+    dr.style.transform = `translateX(${dx}px) rotate(${dx / 25}deg)`;
+    tint.style.background = dx > 0 ? `rgba(76,195,138,${Math.min(.45, dx / 300)})` : `rgba(255,123,114,${Math.min(.45, -dx / 300)})`;
+  };
+  const end = () => {
+    if (x0 === null) return; x0 = null; tint.style.background = '';
+    if (!moved) { S.cur.flip(); return; }
+    if (Math.abs(dx) > 90) grade(dx > 0 ? 3 : 1);
+    else { dr.style.transition = 'transform .2s'; dr.style.transform = ''; }
+  };
+  dr.onpointerup = end; dr.onpointercancel = () => { x0 = null; tint.style.background = ''; dr.style.transition = 'transform .2s'; dr.style.transform = ''; };
 }
-function rCloze(c) {
-  $('#cc').insertAdjacentHTML('beforeend', `<div class="q" id="qq">${cloze(c.q, false)}</div>`);
-  $('#ctl').innerHTML = `<button class="pri" style="width:100%" id="sh">Show answer</button>`;
-  $('#sh').onclick = () => { $('#qq').innerHTML = cloze(c.q, true); reveal(c, ''); gradePanel(c); };
-}
+document.addEventListener('keydown', e => {
+  if (!S?.cur || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+  if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); S.cur.flip(); }
+  else if (e.key === 'ArrowRight') S.cur.grade(3); else if (e.key === 'ArrowLeft') S.cur.grade(1);
+});
 function rMc(c) {
   $('#cc').insertAdjacentHTML('beforeend', `<div class="q">${esc(c.q)}</div><div style="margin-top:12px">${c.choices.map((x, i) => `<button class="choice" data-i="${i}">${esc(x)}</button>`).join('')}</div>`);
   $('#cc').querySelectorAll('.choice').forEach(b => b.onclick = () => {
