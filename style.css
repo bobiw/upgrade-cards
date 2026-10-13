@@ -83,3 +83,10 @@ body.refopen #ref{display:flex;flex-direction:column;position:fixed;z-index:5;ba
   body.refopen header,body.refopen main{margin-right:52vw;max-width:none}
   body.refopen #tabs{max-width:none}
 }
+
+.seg{display:flex;max-width:720px;margin:0 auto;padding:8px 12px;gap:6px}
+.seg button{flex:1;min-height:40px;padding:6px 4px;font-size:14px;font-weight:600;border-radius:10px;color:var(--mut)}
+.seg button small{font-weight:400}
+.seg button.on{background:var(--acc);border-color:var(--acc);color:#fff}
+@media (min-width:760px){.seg{max-width:900px;padding:8px 32px}}
+@media (min-width:1000px){body.refopen .seg{max-width:none}}

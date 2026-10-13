@@ -14,7 +14,7 @@ const dbOpen = () => new Promise((res, rej) => {
 const kvGet = k => new Promise((res, rej) => { const q = idb.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
 const kvSet = (k, v) => new Promise((res, rej) => { const t = idb.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = () => rej(t.error); });
 
-let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '' };
+let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '', deck: 'mine' };
 let S = null; // study session
 const save = () => kvSet('events', events);
 
@@ -46,7 +46,9 @@ function replay() {
 }
 const endOfToday = () => { const d = new Date(); d.setHours(23, 59, 59, 999); return d.getTime(); };
 const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString();
-const pool = () => deck.cards.filter(c => c.check !== 'fail' && !(settings.hideDrafts && c.review === 'draft'));
+const deckOf = c => c.deck || (c.id.startsWith('raw-') ? 'mine' : 'claude');
+const DECKS = [['mine', 'My cards'], ['claude', "Claude's cards"], ['all', 'All']];
+const pool = () => deck.cards.filter(c => c.check !== 'fail' && !(settings.hideDrafts && c.review === 'draft') && (settings.deck === 'all' || deckOf(c) === settings.deck));
 
 function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; }
 
@@ -55,7 +57,7 @@ function buildQueue(extra) {
   const due = P.filter(c => st[c.id] && st[c.id].due <= endOfToday())
     .sort((a, b) => (st[a.id].due - (a.weak ? DAY : 0)) - (st[b.id].due - (b.weak ? DAY : 0)));
   const unseen = P.filter(c => !st[c.id]);
-  const newToday = Object.values(st).filter(s => sameDay(s.first, now)).length;
+  const inPool = new Set(P.map(c => c.id)), newToday = Object.entries(st).filter(([id, s]) => inPool.has(id) && sameDay(s.first, now)).length;
   const allow = extra ? unseen.length : Math.max(0, settings.newPerDay - newToday);
   const fresh = shuffle(unseen.filter(c => c.weak)).concat(shuffle(unseen.filter(c => !c.weak))).slice(0, allow);
   return { st, queue: due.concat(fresh), dueN: due.length, newN: fresh.length, unseenN: unseen.length };
@@ -68,8 +70,13 @@ function weakQueue() {
 // ---------- rendering helpers ----------
 const tabs = { study: viewStudy, stats: viewStats, settings: viewSettings };
 let tab = 'study';
+function deckBar() {
+  const n = k => deck.cards.filter(c => c.check !== 'fail' && (k === 'all' || deckOf(c) === k)).length;
+  $('#deckbar').innerHTML = DECKS.map(([k, l]) => `<button data-deck="${k}" class="${settings.deck === k ? 'on' : ''}">${l}<small> ${n(k)}</small></button>`).join('');
+  $('#deckbar').querySelectorAll('button').forEach(b => b.onclick = () => { settings.deck = b.dataset.deck; kvSet('settings', settings); S = null; closeRef(); show(tab); });
+}
 function show(t) {
-  tab = t; document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+  tab = t; deckBar(); $('#deckbar').style.display = t === 'settings' ? 'none' : 'flex'; document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
   tabs[t]();
 }
 const cloze = (txt, reveal) => esc(txt).replace(/\{\{c\d+::(.*?)\}\}/g, (_, a) => `<span class="blank">${reveal ? a : '[&nbsp;&nbsp;&nbsp;…&nbsp;&nbsp;&nbsp;]'}</span>`);
