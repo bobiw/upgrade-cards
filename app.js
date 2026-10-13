@@ -251,7 +251,7 @@ function viewSettings() {
     <label for="df">Load deck file (deck.json)</label><input type="file" id="df" accept=".json,application/json"></div>
     <div class="card"><b>Manuals (for the side-by-side page viewer)</b>
     <p class="note" id="mst">Checking…</p>
-    <label for="mf">Load manual PDFs (POH, QRH, FOM, PRM, OpsSpecs)</label><input type="file" id="mf" accept=".pdf,application/pdf" multiple>
+    <label for="mf">Load manual PDFs (POH, QRH, FOM, PRM, OpsSpecs, MEL, CDL, QUAL lessons)</label><input type="file" id="mf" accept=".pdf,application/pdf" multiple>
     <p class="note">Stored only on this device. Nothing is uploaded.</p></div>
     <div class="card"><b>Study</b>
     <label for="cd">Check date</label><input type="date" id="cd" value="${esc(settings.checkDate)}">
@@ -294,9 +294,9 @@ async function exportProgress() {
 
 
 // ---------- reference viewer (pdf.js, manuals kept in IndexedDB on this device) ----------
-const MANUALS = ['POH', 'QRH', 'FOM', 'PRM', 'OPSSPECS'];
+const MANUALS = ['POH', 'QRH', 'FOM', 'PRM', 'OPSSPECS', 'MEL', 'CDL', 'QUAL1', 'QUAL2', 'QUAL3', 'QUAL4', 'QUAL5', 'QUAL6'];
 const docs = {};
-const manualKey = n => /ops.?specs/i.test(n) ? 'OPSSPECS' : /PRM/i.test(n) ? 'PRM' : /QRH/i.test(n) ? 'QRH' : /FOM/i.test(n) ? 'FOM' : /POH/i.test(n) ? 'POH' : null;
+const manualKey = n => /QUAL Lesson (\d)/i.test(n) ? 'QUAL' + n.match(/QUAL Lesson (\d)/i)[1] : /\bMEL\b/i.test(n) ? 'MEL' : /\bCDL\b/i.test(n) ? 'CDL' : /ops.?specs/i.test(n) ? 'OPSSPECS' : /PRM/i.test(n) ? 'PRM' : /QRH/i.test(n) ? 'QRH' : /FOM/i.test(n) ? 'FOM' : /POH/i.test(n) ? 'POH' : null;
 async function manualStatus() {
   const out = [];
   for (const k of MANUALS) { const b = await kvGet('pdf:' + k); out.push(`${b ? '✓' : '–'} ${k}${b ? ' (' + (b.byteLength / 1048576).toFixed(1) + ' MB)' : ''}`); }
