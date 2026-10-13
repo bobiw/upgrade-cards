@@ -75,7 +75,7 @@ function show(t) {
 const cloze = (txt, reveal) => esc(txt).replace(/\{\{c\d+::(.*?)\}\}/g, (_, a) => `<span class="blank">${reveal ? a : '[&nbsp;&nbsp;&nbsp;…&nbsp;&nbsp;&nbsp;]'}</span>`);
 
 function head(c) {
-  return `<div class="meta"><span class="tag">${esc(c.topic)}</span>${c.review === 'draft' ? '<span class="tag draft">DRAFT</span>' : ''}${c.weak ? '<span class="tag">weak area</span>' : ''}</div>`;
+  return `<div class="meta"><span class="tag">${esc(c.topic)}</span>${c.review === 'draft' ? '<span class="tag draft">DRAFT</span>' : c.review === 'generated' ? '<span class="tag">AI-written · quote-checked</span>' : ''}${c.weak ? '<span class="tag">weak area</span>' : ''}</div>`;
 }
 function srcBlock(c) {
   return `<div class="src">[${esc(c.cite)}] · ${esc(c.src)} ${esc(deck.meta.revs?.[c.src] || '')} <button class="small" data-open="${esc(c.src)}:${c.page}">Open page ${c.page}</button>${c.quotes?.length ? `<q>${esc(c.quotes.join(' … '))}</q>` : ''}${c.note ? `<div style="margin-top:6px">${esc(c.note)}</div>` : ''}</div>`;
