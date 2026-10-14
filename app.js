@@ -296,7 +296,7 @@ async function exportProgress() {
 // ---------- reference viewer (pdf.js, manuals kept in IndexedDB on this device) ----------
 const MANUALS = ['POH', 'QRH', 'FOM', 'PRM', 'OPSSPECS', 'MEL', 'CDL', 'QUAL1', 'QUAL2', 'QUAL3', 'QUAL4', 'QUAL5', 'QUAL6'];
 const docs = {};
-const manualKey = n => /QUAL Lesson (\d)/i.test(n) ? 'QUAL' + n.match(/QUAL Lesson (\d)/i)[1] : /\bMEL\b/i.test(n) ? 'MEL' : /\bCDL\b/i.test(n) ? 'CDL' : /ops.?specs/i.test(n) ? 'OPSSPECS' : /PRM/i.test(n) ? 'PRM' : /QRH/i.test(n) ? 'QRH' : /FOM/i.test(n) ? 'FOM' : /POH/i.test(n) ? 'POH' : null;
+const manualKey = n => MANUALS.includes(n.replace(/\.pdf$/i, '').toUpperCase()) ? n.replace(/\.pdf$/i, '').toUpperCase() : /QUAL Lesson (\d)/i.test(n) ? 'QUAL' + n.match(/QUAL Lesson (\d)/i)[1] : /CDL/i.test(n) ? 'CDL' : /MEL/i.test(n) ? 'MEL' : /ops.?specs/i.test(n) ? 'OPSSPECS' : /PRM/i.test(n) ? 'PRM' : /QRH/i.test(n) ? 'QRH' : /FOM/i.test(n) ? 'FOM' : /POH/i.test(n) ? 'POH' : null;
 async function manualStatus() {
   const out = [];
   for (const k of MANUALS) { const b = await kvGet('pdf:' + k); out.push(`${b ? '✓' : '–'} ${k}${b ? ' (' + (b.byteLength / 1048576).toFixed(1) + ' MB)' : ''}`); }
