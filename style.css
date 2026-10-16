@@ -90,3 +90,33 @@ body.refopen #ref{display:flex;flex-direction:column;position:fixed;z-index:5;ba
 .seg button.on{background:var(--acc);border-color:var(--acc);color:#fff}
 @media (min-width:760px){.seg{max-width:900px;padding:8px 32px}}
 @media (min-width:1000px){body.refopen .seg{max-width:none}}
+
+/* swipe card v2 */
+.swipe{position:relative;perspective:1400px}
+.drag{perspective:none;will-change:transform;touch-action:pan-y;position:relative;backface-visibility:hidden}
+.tint{opacity:0;pointer-events:none;z-index:3}
+.tint.ok{background:#4cc38a}.tint.no{background:#ff7b72}
+.sc{will-change:transform}
+.ans{margin:auto 0;font-size:22px;line-height:1.4;text-align:center}
+.ans p{margin:.3em 0}
+.ans.list{text-align:left;font-size:20px;margin:6px 0}
+.lst{margin:.35em 0;padding-left:1.3em}.lst li{margin:.4em 0}
+.a .lst,.face .lst{text-align:left}
+.ref{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}.ref:first-child{border-top:0;margin-top:0;padding-top:0}
+.rh{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.rn{font-size:14px;color:var(--mut);margin:4px 0}
+.ref q{display:block;font-size:13px;font-style:italic;margin-top:4px}
+.alert{margin-top:12px;padding:10px 12px;border:1px solid var(--warn);border-radius:10px;font-size:15px;background:rgba(227,179,65,.1)}
+.alert.bad{border-color:var(--bad);background:rgba(255,123,114,.1)}
+.sugg{margin-top:12px;padding:10px 12px;border:1px solid var(--ok);border-radius:10px;background:rgba(76,195,138,.08)}
+.sugg q{display:block;font-size:13px;font-style:italic;margin-top:4px}
+.fig{margin-top:12px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff;cursor:pointer}
+.fig .rn{padding:6px 10px;background:var(--card);color:var(--mut);margin:0}
+.fig canvas{display:block;width:100%;height:auto;max-height:70dvh;object-fit:contain}
+.rchips{display:flex;gap:6px;padding:6px 10px;overflow-x:auto;border-bottom:1px solid var(--line)}
+.chip{min-height:34px;padding:4px 10px;font-size:13px;white-space:nowrap;border-radius:99px}
+.chip.on{background:var(--acc);border-color:var(--acc);color:#fff}
+#ref.rdark .rbody{background:#0b0f14}
+#ref.rdark .rbody canvas{filter:invert(.92) hue-rotate(180deg) contrast(.95);box-shadow:none}
+select{width:100%;font:inherit;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+s{color:var(--bad)}

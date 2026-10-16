@@ -14,7 +14,7 @@ const dbOpen = () => new Promise((res, rej) => {
 const kvGet = k => new Promise((res, rej) => { const q = idb.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
 const kvSet = (k, v) => new Promise((res, rej) => { const t = idb.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = () => rej(t.error); });
 
-let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '', deck: 'mine' };
+let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '', deck: 'mine', hideDups: true, refDark: 'auto' };
 let S = null; // study session
 const save = () => kvSet('events', events);
 
@@ -26,16 +26,24 @@ function maxIvl() {
   return days > 1 ? Math.max(1, Math.floor(days / 2)) : 1;
 }
 function step(s, e, cap) {
-  s = s || { ease: 2.5, ivl: 0, reps: 0, lapses: 0, n: 0, ok: 0, first: e.t };
+  s = s || { ease: 2.5, ivl: 0, reps: 0, lapses: 0, n: 0, ok: 0, first: e.t, rl: 0, streak: 0 };
   s.n++; if (e.g >= 2) s.ok++;
-  if (e.g === 1) { s.lapses++; s.reps = 0; s.ivl = 0; s.ease = Math.max(1.3, s.ease - .2); s.due = e.t + 10 * 60e3; }
+  if (e.g === 1) { s.lapses++; s.reps = 0; s.streak = 0; s.rl = 2; s.ivl = 0; s.ease = Math.max(1.3, s.ease - .2); s.due = e.t + 10 * 60e3; }
   else {
-    s.reps++;
-    let i = s.reps === 1 ? { 2: 1, 3: 1, 4: 3 }[e.g] : s.reps === 2 ? { 2: 2, 3: 3, 4: 6 }[e.g]
-      : s.ivl * { 2: 1.2, 3: s.ease, 4: s.ease * 1.3 }[e.g];
-    s.ease = Math.min(3, Math.max(1.3, s.ease + { 2: -.15, 3: 0, 4: .15 }[e.g]));
-    s.ivl = Math.min(cap, Math.max(1, Math.round(i)));
-    s.due = e.t + s.ivl * DAY;
+    s.streak++;
+    if (s.rl > 0) {                      // relearning after a miss: two good answers spaced apart, then tomorrow
+      s.rl--;
+      if (s.rl > 0) s.due = e.t + 10 * 60e3;
+      else { s.ivl = Math.min(cap, e.g === 4 ? 2 : 1); s.reps = 1; s.due = e.t + s.ivl * DAY; }
+    } else {
+      s.reps++;
+      let i = s.reps === 1 ? { 2: 1, 3: 1, 4: 3 }[e.g] : s.reps === 2 ? { 2: 2, 3: 3, 4: 6 }[e.g]
+        : s.ivl * { 2: 1.2, 3: s.ease, 4: s.ease * 1.3 }[e.g];
+      if (s.lapses >= 2 && s.streak < 5) i = Math.min(i, Math.max(1, Math.ceil(s.ivl * 1.5)));   // often-missed cards climb slowly
+      s.ease = Math.min(3, Math.max(1.3, s.ease + { 2: -.15, 3: 0, 4: .15 }[e.g]));
+      s.ivl = Math.min(cap, Math.max(1, Math.round(i)));
+      s.due = e.t + s.ivl * DAY;
+    }
   }
   s.last = e.t; return s;
 }
@@ -48,19 +56,26 @@ const endOfToday = () => { const d = new Date(); d.setHours(23, 59, 59, 999); re
 const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString();
 const deckOf = c => c.deck || (c.id.startsWith('raw-') ? 'mine' : 'claude');
 const DECKS = [['mine', 'My cards'], ['claude', "Claude's cards"], ['all', 'All']];
-const pool = () => deck.cards.filter(c => c.check !== 'fail' && !(settings.hideDrafts && c.review === 'draft') && (settings.deck === 'all' || deckOf(c) === settings.deck));
+const visible = c => c.check !== 'fail' && !(settings.hideDups && deckOf(c) === 'claude' && c.dup?.some(d => d.sim >= .6));
+const pool = () => deck.cards.filter(c => visible(c) && !(settings.hideDrafts && c.review === 'draft') && (settings.deck === 'all' || deckOf(c) === settings.deck));
 
 function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; }
 
+// full shuffle, with a nudge toward weak areas and cards missed before, and no two same-topic cards in a row
+function mix(cards, st) {
+  const k = c => Math.random() - (c.weak ? .2 : 0) - Math.min(.3, (st[c.id]?.lapses || 0) * .1) - (st[c.id]?.rl > 0 ? .4 : 0);
+  const a = cards.map(c => [k(c), c]).sort((x, y) => x[0] - y[0]).map(x => x[1]), out = [];
+  while (a.length) { const last = out[out.length - 1]?.topic; let i = a.findIndex(c => c.topic !== last); if (i < 0) i = 0; out.push(a.splice(i, 1)[0]); }
+  return out;
+}
 function buildQueue(extra) {
   const st = replay(), P = pool(), now = Date.now();
-  const due = P.filter(c => st[c.id] && st[c.id].due <= endOfToday())
-    .sort((a, b) => (st[a.id].due - (a.weak ? DAY : 0)) - (st[b.id].due - (b.weak ? DAY : 0)));
+  const due = P.filter(c => st[c.id] && st[c.id].due <= endOfToday());
   const unseen = P.filter(c => !st[c.id]);
   const inPool = new Set(P.map(c => c.id)), newToday = Object.entries(st).filter(([id, s]) => inPool.has(id) && sameDay(s.first, now)).length;
   const allow = extra ? unseen.length : Math.max(0, settings.newPerDay - newToday);
-  const fresh = shuffle(unseen.filter(c => c.weak)).concat(shuffle(unseen.filter(c => !c.weak))).slice(0, allow);
-  return { st, queue: due.concat(fresh), dueN: due.length, newN: fresh.length, unseenN: unseen.length };
+  const fresh = shuffle(unseen.slice()).sort((x, y) => (y.weak ? 1 : 0) - (x.weak ? 1 : 0)).slice(0, allow);
+  return { st, queue: mix(due.concat(fresh), st), dueN: due.length, newN: fresh.length, unseenN: unseen.length };
 }
 function weakQueue() {
   const st = replay();
@@ -71,7 +86,7 @@ function weakQueue() {
 const tabs = { study: viewStudy, stats: viewStats, settings: viewSettings };
 let tab = 'study';
 function deckBar() {
-  const n = k => deck.cards.filter(c => c.check !== 'fail' && (k === 'all' || deckOf(c) === k)).length;
+  const n = k => deck.cards.filter(c => visible(c) && (k === 'all' || deckOf(c) === k)).length;
   $('#deckbar').innerHTML = DECKS.map(([k, l]) => `<button data-deck="${k}" class="${settings.deck === k ? 'on' : ''}">${l}<small> ${n(k)}</small></button>`).join('');
   $('#deckbar').querySelectorAll('button').forEach(b => b.onclick = () => { settings.deck = b.dataset.deck; kvSet('settings', settings); S = null; closeRef(); show(tab); });
 }
@@ -82,10 +97,90 @@ function show(t) {
 const cloze = (txt, reveal) => esc(txt).replace(/\{\{c\d+::(.*?)\}\}/g, (_, a) => `<span class="blank">${reveal ? a : '[&nbsp;&nbsp;&nbsp;…&nbsp;&nbsp;&nbsp;]'}</span>`);
 
 function head(c) {
-  return `<div class="meta"><span class="tag">${esc(c.topic)}</span>${c.review === 'draft' ? '<span class="tag draft">DRAFT</span>' : c.review === 'generated' ? '<span class="tag">AI-written · quote-checked</span>' : ''}${c.weak ? '<span class="tag">weak area</span>' : ''}</div>`;
+  return `<div class="meta"><span class="tag">${esc(c.topic)}</span>${c.review === 'draft' ? '<span class="tag draft">DRAFT</span>' : c.review === 'generated' ? '<span class="tag">AI-written · quote-checked</span>' : ''}${c.weak ? '<span class="tag">weak area</span>' : ''}${c.status === 'flagged' ? '<span class="tag draft">check this card</span>' : ''}</div>`;
+}
+// answers: lines starting with - • * or 1. 2) become list items; other lines stay paragraphs
+function rich(s) {
+  const lines = String(s ?? '').split('\n'); let html = '', items = [], ord = false;
+  const flush = () => { if (items.length) { html += `<${ord ? 'ol' : 'ul'} class="lst">${items.map(t => `<li>${esc(t)}</li>`).join('')}</${ord ? 'ol' : 'ul'}>`; items = []; } };
+  for (const raw of lines) {
+    const m = raw.match(/^\s*(?:([-•*])\s+|(\d{1,2})[.)]\s*(?=\D))(.*)$/);
+    if (m) { if (!items.length) ord = !!m[2]; items.push(m[3]); } else { flush(); if (raw.trim()) html += `<p>${esc(raw)}</p>`; }
+  }
+  flush(); return html;
+}
+const hasList = s => /(^|\n)\s*(?:[-•*]\s+|\d{1,2}[.)]\s*(?=\D))/.test(String(s ?? ''));
+const ans = s => `<div class="ans${hasList(s) ? ' list' : ''}">${rich(s)}</div>`;
+
+let curRefs = [];
+const REL = { same: 'Also says', adds: 'Adds', conflicts: 'Differs', suggested: 'Suggested answer' };
+function refsOf(c) {
+  const r = [];
+  if (c.src && c.page && !c.nosrc) r.push({ src: c.src, page: c.page, cite: c.cite, quote: (c.quotes || []).join(' … '), primary: true });
+  for (const x of c.also || []) r.push({ ...x });
+  if (c.suggest?.src) r.push({ src: c.suggest.src, page: c.suggest.page, cite: c.suggest.cite, quote: (c.suggest.quotes || []).join(' … '), rel: 'suggested' });
+  return r;
 }
 function srcBlock(c) {
-  return `<div class="src">[${esc(c.cite)}] · ${esc(c.src)} ${esc(deck.meta.revs?.[c.src] || '')} <button class="small" data-open="${esc(c.src)}:${c.page}">Open page ${c.page}</button>${c.quotes?.length ? `<q>${esc(c.quotes.join(' … '))}</q>` : ''}${c.note ? `<div style="margin-top:6px">${esc(c.note)}</div>` : ''}</div>`;
+  curRefs = refsOf(c);
+  const row = r => `<div class="ref${r.primary ? ' pri' : ''}"><div class="rh">${r.primary ? '' : `<span class="tag ${r.rel === 'conflicts' ? 'draft' : ''}">${REL[r.rel] || 'Also'}</span> `}<b>${esc(r.cite || r.src + ' p.' + r.page)}</b>${r.primary ? ' · ' + esc(deck.meta.revs?.[r.src] || '') : ''} <button class="small" data-open="${esc(r.src)}:${r.page}">Open page ${r.page}</button></div>${r.note ? `<div class="rn">${esc(r.note)}</div>` : ''}${r.quote ? `<q>${esc(r.quote)}</q>` : ''}</div>`;
+  const shown = curRefs.filter(r => r.rel !== 'suggested');
+  const none = !shown.length ? `<div class="ref muted">${esc(c.nolib || 'No source page is attached to this card.')}</div>` : '';
+  return `<div class="src">${shown.map(row).join('')}${none}${c.note ? `<div class="rn" style="margin-top:8px">${esc(c.note)}</div>` : ''}</div>`;
+}
+function dupNote(c) {
+  if (deckOf(c) === 'mine' && c.dupBy?.length) return `<div class="alert">Claude has a similar card${c.dupBy.some(d => d.sim >= .6) && settings.hideDups ? ' (hidden so you do not see it twice)' : ''}: “${esc(c.dupBy[0].q)}”</div>`;
+  if (deckOf(c) === 'claude' && c.dup?.length) return `<div class="alert">Similar to your card: “${esc(c.dup[0].q)}”</div>`;
+  return '';
+}
+function mineBlock(c) {
+  if (deckOf(c) !== 'mine') return dupNote(c);
+  let h = '';
+  if (c.status === 'flagged' && c.issue) h += `<div class="alert bad"><b>Check this card.</b> ${esc(c.issue)}</div>`;
+  else if (c.status === 'unmatched') h += `<div class="alert">The manual page is ${esc(c.src)} p.${c.page}, but the exact wording couldn't be matched there. Worth a look.</div>`;
+  if (c.spell?.length) h += `<div class="alert">Spelling: ${c.spell.map(s => `<s>${esc(s.bad)}</s> → <b>${esc(s.good)}</b>`).join(', ')}</div>`;
+  if (c.suggest?.a) h += `<div class="sugg"><b>Suggested answer</b>${rich(c.suggest.a)}${c.suggest.why ? `<div class="rn">${esc(c.suggest.why)}</div>` : ''}${c.suggest.src ? `<div class="rh"><b>${esc(c.suggest.cite || '')}</b> <button class="small" data-open="${esc(c.suggest.src)}:${c.suggest.page}">Open page ${c.suggest.page}</button></div>${c.suggest.quotes?.length ? `<q>${esc(c.suggest.quotes.join(' … '))}</q>` : ''}` : ''}</div>`;
+  else if (c.nolib) h += `<div class="alert">${esc(c.nolib)}</div>`;
+  return h + dupNote(c);
+}
+const reviewQueue = () => pool().filter(c => deckOf(c) === 'mine' && (c.status === 'flagged' || c.spell?.length || c.suggest?.a));
+
+// diagrams: if a cited page has a large picture, show just that picture under the answer (needs the manual PDF on this device)
+const figCache = {};
+async function figBox(pg, key) {
+  if (key in figCache) return figCache[key];
+  const O = pdfjsLib.OPS, U = pdfjsLib.Util, vp = pg.getViewport({ scale: 1 }), ops = await pg.getOperatorList();
+  let ctm = vp.transform.slice(), st = [], boxes = [];
+  const img = () => { const p = [[0, 0], [1, 0], [0, 1], [1, 1]].map(q => U.applyTransform(q, ctm)), xs = p.map(q => q[0]), ys = p.map(q => q[1]);
+    boxes.push([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]); };
+  ops.fnArray.forEach((fn, i) => {
+    const ar = ops.argsArray[i];
+    if (fn === O.save) st.push(ctm.slice()); else if (fn === O.restore) ctm = st.pop() || ctm;
+    else if (fn === O.transform) ctm = U.transform(ctm, ar);
+    else if (fn === O.paintFormXObjectBegin) { st.push(ctm.slice()); if (ar[0]) ctm = U.transform(ctm, ar[0]); } else if (fn === O.paintFormXObjectEnd) ctm = st.pop() || ctm;
+    else if (fn === O.paintImageXObject || fn === O.paintInlineImageXObject || fn === O.paintImageMaskXObject) img();
+  });
+  const pageArea = vp.width * vp.height, big = boxes.filter(b => b[2] - b[0] >= 120 && b[3] - b[1] >= 80 && (b[2] - b[0]) * (b[3] - b[1]) < pageArea * .8);
+  if (!big.length) return figCache[key] = null;
+  const x0 = Math.max(0, Math.min(...big.map(b => b[0])) - 6), y0 = Math.max(0, Math.min(...big.map(b => b[1])) - 6), x1 = Math.min(vp.width, Math.max(...big.map(b => b[2])) + 6), y1 = Math.min(vp.height, Math.max(...big.map(b => b[3])) + 6);
+  return figCache[key] = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+async function showFigs(c) {
+  const el = document.getElementById('figs'); if (!el || el.dataset.done) return; el.dataset.done = 1;
+  let shown = 0;
+  for (const r of refsOf(c).filter(r => r.rel !== 'suggested')) {
+    if (shown >= 2) break;
+    try {
+      await ensurePdfLib(); const doc = await getDoc(r.src); if (!doc) continue;
+      const pg = await doc.getPage(r.page), box = await figBox(pg, r.src + ':' + r.page); if (!box) continue;
+      const w = Math.max(220, el.clientWidth), scale = Math.min(3, w / box.w), d = window.devicePixelRatio || 1;
+      const cv = document.createElement('canvas'); cv.width = box.w * scale * d; cv.height = box.h * scale * d; cv.style.width = '100%'; cv.style.height = 'auto';
+      const vp = pg.getViewport({ scale, offsetX: -box.x * scale, offsetY: -box.y * scale });
+      await pg.render({ canvasContext: cv.getContext('2d'), viewport: vp, transform: d !== 1 ? [d, 0, 0, d, 0, 0] : null }).promise;
+      const fig = document.createElement('div'); fig.className = 'fig'; fig.dataset.open = r.src + ':' + r.page;
+      fig.innerHTML = `<div class="rn">Diagram · ${esc(r.cite || r.src + ' p.' + r.page)} · tap to open the page</div>`; fig.appendChild(cv); el.appendChild(fig); shown++;
+    } catch (_) { /* no PDF or page: skip quietly */ }
+  }
 }
 const gradeBtns = sug => [[1, 'Again'], [2, 'Hard'], [3, 'Good'], [4, 'Easy']]
   .map(([g, l]) => `<button class="g${g}${sug === g ? ' sug' : ''}" data-g="${g}">${l}</button>`).join('');
@@ -97,11 +192,12 @@ function viewStudy() {
     const b = buildQueue(false), weak = weakQueue().length;
     $('#main').innerHTML = `<div class="grid"><div class="card"><div class="big">${b.dueN}</div><small>due</small></div><div class="card"><div class="big">${b.newN}</div><small>new today</small></div><div class="card"><div class="big">${weak}</div><small>weak</small></div></div>
       ${b.queue.length ? `<button class="pri" style="width:100%" id="go">Start ${b.queue.length} cards</button>` : `<div class="card"><div class="q">Nothing due.</div><p class="muted">${b.unseenN} unseen cards are held back by the daily limit.</p></div>`}
-      <div class="row" style="margin-top:10px">${b.unseenN ? `<button id="more">Study unseen (${b.unseenN})</button>` : ''}${weak ? `<button id="wk">Drill weak (${weak})</button>` : ''}</div>`;
-    const go = q => { S = { queue: q.slice(), i: 0, shown: false, t0: Date.now(), total: q.length, done: 0 }; viewStudy(); };
+      <div class="row" style="margin-top:10px">${b.unseenN ? `<button id="more">Study unseen (${b.unseenN})</button>` : ''}${weak ? `<button id="wk">Drill weak (${weak})</button>` : ''}${reviewQueue().length ? `<button id="rv">My cards to check (${reviewQueue().length})</button>` : ''}</div>`;
+    const go = q => { S = { queue: q.slice(), i: 0, shown: false, t0: Date.now(), total: q.length, done: 0, rl: {} }; viewStudy(); };
     if ($('#go')) $('#go').onclick = () => go(b.queue);
     if ($('#more')) $('#more').onclick = () => go(buildQueue(true).queue);
-    if ($('#wk')) $('#wk').onclick = () => go(shuffle(weakQueue()));
+    if ($('#wk')) $('#wk').onclick = () => go(mix(weakQueue(), b.st));
+    if ($('#rv')) $('#rv').onclick = () => go(mix(reviewQueue(), b.st));
     return;
   }
   if (S.i >= S.queue.length) {
@@ -117,11 +213,14 @@ function viewStudy() {
 function done(c, g) {
   events.push({ id: uid(), c: c.id, t: Date.now(), g, ms: Date.now() - S.t0, d: settings.device });
   save(); S.done++;
-  if (g === 1) { const at = Math.min(S.queue.length, S.i + 5); S.queue.splice(at, 0, c); }
+  const rnd = (lo, hi) => lo + (Math.random() * (hi - lo + 1) | 0), put = k => S.queue.splice(Math.min(S.queue.length, S.i + 1 + k), 0, c);
+  S.rl ||= {};
+  if (g === 1) { S.rl[c.id] = 2; put(rnd(7, 11)); }                                   // missed: back after ~7-11 cards, again after that
+  else if (S.rl[c.id] > 0) { S.rl[c.id]--; if (S.rl[c.id] > 0) put(rnd(14, 20)); else delete S.rl[c.id]; }
   S.i++; viewStudy();
 }
 function reveal(c, html) {
-  $('#cc').insertAdjacentHTML('beforeend', html + srcBlock(c));
+  $('#cc').insertAdjacentHTML('beforeend', html + mineBlock(c) + '<div id="figs"></div>' + srcBlock(c)); showFigs(c);
 }
 function flagBtn(c) {
   return `<button class="small" id="flag" style="margin-top:10px">⚑ Flag this card</button>`;
@@ -135,36 +234,42 @@ function gradePanel(c, sug) {
   $('#ctl').querySelectorAll('[data-g]').forEach(b => b.onclick = () => done(c, +b.dataset.g));
   wireFlag(c);
 }
-function rFlip(c) { rSwipe(c, `<div class="q">${esc(c.q)}</div>`, `<div class="q">${esc(c.a)}</div>`); }
+function rFlip(c) { rSwipe(c, `<div class="q">${esc(c.q)}</div>`, ans(c.a)); }
 function rCloze(c) { rSwipe(c, `<div class="q">${cloze(c.q, false)}</div>`, `<div class="q">${cloze(c.q, true)}</div>`); }
-// flip card: tap to flip, swipe right = correct, swipe left = incorrect (buttons and arrow keys too)
+// flip card: tap to flip; drag right = got it, left = missed (buttons and arrow keys do the same)
 function rSwipe(c, front, back) {
   const cc = $('#cc'); cc.className = 'plain';
-  cc.innerHTML = `<div class="drag" id="dr"><div class="sc" id="sc">
+  cc.innerHTML = `<div class="swipe"><div class="drag" id="dr"><div class="sc" id="sc">
     <div class="face front">${head(c)}${front}<div class="hint">Tap to flip</div></div>
-    <div class="face back">${head(c)}${back}${srcBlock(c)}</div></div><div class="tint" id="tint"></div></div>`;
-  $('#ctl').innerHTML = `<div class="row"><button class="g1" id="bx">✗ Missed</button><button class="g3" id="bo">✓ Got it</button></div><p class="note" style="text-align:center;margin:8px 0">Swipe right ✓ · swipe left ✗<span class="kbd">Keyboard: Space flips · → correct · ← missed</span></p>${flagBtn(c)}`;
+    <div class="face back">${head(c)}${back}${mineBlock(c)}<div id="figs"></div>${srcBlock(c)}</div></div>
+    <div class="tint ok" id="tok"></div><div class="tint no" id="tno"></div></div></div>`;
+  $('#ctl').innerHTML = `<div class="row"><button class="g1" id="bx">✗ Missed</button><button class="g3" id="bo">✓ Got it</button></div><p class="note kbd" style="text-align:center;margin:8px 0">Keyboard: Space flips · → got it · ← missed</p>${flagBtn(c)}`;
   wireFlag(c);
-  const dr = $('#dr'), sc = $('#sc'), tint = $('#tint');
-  let x0 = null, y0 = 0, dx = 0, moved = false, busy = false;
-  const grade = g => { if (busy) return; busy = true; dr.style.transition = 'transform .22s, opacity .22s'; dr.style.transform = `translateX(${g === 3 ? 140 : -140}%) rotate(${g === 3 ? 18 : -18}deg)`; dr.style.opacity = 0; setTimeout(() => done(c, g), 200); };
-  S.cur = { flip: () => sc.classList.toggle('flipped'), grade };
+  const dr = $('#dr'), sc = $('#sc'), tok = $('#tok'), tno = $('#tno');
+  let x0 = null, y0 = 0, off = 0, dx = 0, moved = false, busy = false, raf = 0, hist = [];
+  const paint = () => { raf = 0; dr.style.transform = `translate3d(${dx}px,0,0) rotate(${dx / 28}deg)`; const t = Math.min(.55, Math.abs(dx) / 240); tok.style.opacity = dx > 0 ? t : 0; tno.style.opacity = dx < 0 ? t : 0; };
+  const reset = () => { x0 = null; moved = false; dr.style.transition = 'transform .18s ease-out'; dr.style.transform = ''; tok.style.opacity = 0; tno.style.opacity = 0; };
+  const grade = (g, fast) => { if (busy) return; busy = true; dr.style.transition = `transform ${fast ? .14 : .2}s ease-in, opacity ${fast ? .14 : .2}s`; dr.style.transform = `translate3d(${g === 3 ? 130 : -130}%,0,0) rotate(${g === 3 ? 16 : -16}deg)`; dr.style.opacity = 0; setTimeout(() => done(c, g), fast ? 120 : 170); };
+  let flipped = false;
+  const flip = () => { flipped = !flipped; sc.classList.toggle('flipped', flipped); if (flipped) showFigs(c); };
+  S.cur = { flip, grade };
   $('#bx').onclick = () => grade(1); $('#bo').onclick = () => grade(3);
-  dr.onpointerdown = e => { if (e.target.closest('button')) return; x0 = e.clientX; y0 = e.clientY; dx = 0; moved = false; dr.style.transition = 'none'; try { dr.setPointerCapture(e.pointerId); } catch (_) {} };
+  dr.onpointerdown = e => { if (busy || e.target.closest('button,[data-open]')) return; x0 = e.clientX; y0 = e.clientY; dx = 0; off = 0; moved = false; hist = [[e.timeStamp, e.clientX]]; dr.style.transition = 'none'; };
   dr.onpointermove = e => {
-    if (x0 === null) return; dx = e.clientX - x0;
-    if (!moved && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(e.clientY - y0)) moved = true;
-    if (!moved) return;
-    dr.style.transform = `translateX(${dx}px) rotate(${dx / 25}deg)`;
-    tint.style.background = dx > 0 ? `rgba(76,195,138,${Math.min(.45, dx / 300)})` : `rgba(255,123,114,${Math.min(.45, -dx / 300)})`;
+    if (x0 === null) return;
+    const rx = e.clientX - x0, ry = e.clientY - y0;
+    if (!moved) { if (Math.abs(rx) > 6 && Math.abs(rx) > Math.abs(ry) * 1.1) { moved = true; off = rx; try { dr.setPointerCapture(e.pointerId); } catch (_) {} } else return; }
+    dx = rx - off; hist.push([e.timeStamp, e.clientX]); if (hist.length > 6) hist.shift();
+    if (!raf) raf = requestAnimationFrame(paint);
   };
-  const end = () => {
-    if (x0 === null) return; x0 = null; tint.style.background = '';
-    if (!moved) { S.cur.flip(); return; }
-    if (Math.abs(dx) > 90) grade(dx > 0 ? 3 : 1);
-    else { dr.style.transition = 'transform .2s'; dr.style.transform = ''; }
+  dr.onpointerup = e => {
+    if (x0 === null) return;
+    if (!moved) { x0 = null; flip(); return; }
+    const a0 = hist[0], a1 = hist[hist.length - 1], v = a1[0] > a0[0] ? (a1[1] - a0[1]) / (a1[0] - a0[0]) : 0;   // px per ms
+    x0 = null;
+    if (Math.abs(dx) > 70 || (Math.abs(v) > .5 && Math.abs(dx) > 24)) grade((Math.abs(dx) > 70 ? dx : v) > 0 ? 3 : 1, true); else reset();
   };
-  dr.onpointerup = end; dr.onpointercancel = () => { x0 = null; tint.style.background = ''; dr.style.transition = 'transform .2s'; dr.style.transform = ''; };
+  dr.onpointercancel = reset;
 }
 document.addEventListener('keydown', e => {
   if (!S?.cur || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
@@ -177,7 +282,7 @@ function rMc(c) {
     const i = +b.dataset.i, ok = i === c.correct;
     $('#cc').querySelectorAll('.choice').forEach((x, j) => { x.disabled = true; if (j === c.correct) x.classList.add('right'); });
     if (!ok) b.classList.add('wrong');
-    reveal(c, c.a ? `<div class="a">${esc(c.a)}</div>` : '');
+    reveal(c, c.a ? `<div class="a">${rich(c.a)}</div>` : '');
     $('#ctl').innerHTML = `<button class="pri" style="width:100%" id="nx">Next</button>${flagBtn(c)}`;
     $('#nx').onclick = () => done(c, ok ? 3 : 1); wireFlag(c);
   });
@@ -202,7 +307,7 @@ function rTyped(c) {
     const exp = normTxt(c.a), got = normTxt($('#ta').value), d = lcsDiff(exp, got);
     const miss = d.filter(x => x[0] !== 'ok').length, sug = miss === 0 ? 3 : miss <= Math.max(1, exp.length * .15) ? 2 : 1;
     $('#ta').disabled = true;
-    reveal(c, `<div class="a diff">${d.map(([k, w]) => `<span class="${k}">${esc(w)}</span>`).join(' ')}</div><div class="a">${esc(c.a)}</div>`);
+    reveal(c, `<div class="a diff">${d.map(([k, w]) => `<span class="${k}">${esc(w)}</span>`).join(' ')}</div><div class="a">${rich(c.a)}</div>`);
     gradePanel(c, sug);
   };
 }
@@ -241,13 +346,15 @@ function viewStats() {
     <div class="card"><b>7-day accuracy:</b> ${acc7 === null ? '–' : acc7 + '%'} (${w7.length} answers)${check !== null ? ` · <b>${check}</b> days to check date` : ''}</div>
     <h2>By topic</h2><div class="card"><table><tr><th>Topic</th><th class="n">Seen</th><th class="n">Acc</th><th class="n">Lapses</th></tr>${rows}</table></div>
     <h2>Weakest cards</h2><div class="card">${weak ? `<table><tr><th>Card</th><th class="n">Acc</th><th class="n">Lapses</th></tr>${weak}</table>` : '<span class="muted">No misses yet.</span>'}</div>
+    ${(() => { const n = reviewQueue().length; return n ? `<h2>Your cards</h2><div class="card"><b>${n}</b> of your cards need a look: a wrong or incomplete answer, a spelling fix, or a suggested better answer with a reference.<div class="row" style="margin-top:10px"><button id="rv2">Study those ${n}</button></div></div>` : ''; })()}
     ${flags ? `<h2>Flagged</h2><div class="card"><table>${flags}</table></div>` : ''}`;
+  if ($('#rv2')) $('#rv2').onclick = () => { S = { queue: mix(reviewQueue(), st), i: 0, shown: false, t0: Date.now(), total: 0, done: 0, rl: {} }; show('study'); };
 }
 
 // ---------- settings / import / export ----------
 function viewSettings() {
-  const dr = deck.cards.filter(c => c.review === 'draft').length;
-  $('#main').innerHTML = `<div class="card"><b>Deck</b><p class="note">${deck.cards.length} cards (${dr} draft) · built ${esc(deck.meta.built || 'never')}<br>${esc(Object.entries(deck.meta.revs || {}).map(([k, v]) => k + ' ' + v).join(' · '))}</p>
+  const dr = deck.cards.filter(c => c.review === 'draft').length, dups = deck.cards.filter(c => c.dup?.some(d => d.sim >= .6)).length;
+  $('#main').innerHTML = `<div class="card"><b>Deck</b><p class="note">${deck.cards.length} cards (${dr} draft, ${dups} of Claude's duplicate yours) · built ${esc(deck.meta.built || 'never')}<br>${esc(Object.entries(deck.meta.revs || {}).map(([k, v]) => k + ' ' + v).join(' · '))}</p>
     <label for="df">Load deck file (deck.json)</label><input type="file" id="df" accept=".json,application/json"></div>
     <div class="card"><b>Manuals (for the side-by-side page viewer)</b>
     <p class="note" id="mst">Checking…</p>
@@ -257,7 +364,9 @@ function viewSettings() {
     <label for="cd">Check date</label><input type="date" id="cd" value="${esc(settings.checkDate)}">
     <p class="note">Review gaps are capped at half the days left, so nothing is scheduled past the check.</p>
     <label for="np">New cards per day</label><input type="number" id="np" min="0" max="200" value="${settings.newPerDay}">
-    <label><input type="checkbox" id="hd" ${settings.hideDrafts ? 'checked' : ''}> Hide DRAFT cards</label></div>
+    <label><input type="checkbox" id="hd" ${settings.hideDrafts ? 'checked' : ''}> Hide DRAFT cards</label>
+    <label><input type="checkbox" id="hdup" ${settings.hideDups ? 'checked' : ''}> Hide Claude's cards that duplicate one of mine</label>
+    <label for="rdk">Manual page viewer</label><select id="rdk"><option value="auto">Dark when the device is dark</option><option value="on">Always dark</option><option value="off">Always light</option></select></div>
     <div class="card"><b>Progress</b><p class="note">${events.length} events · device ${esc(settings.device)}. Export from one device, import on another. Merging is safe to repeat.</p>
     <div class="row"><button id="ex" class="pri">Export / share</button></div>
     <label for="pf">Import progress file</label><input type="file" id="pf" accept=".json,application/json"><p class="note" id="msg"></p></div>
@@ -272,6 +381,8 @@ function viewSettings() {
   $('#cd').onchange = e => { settings.checkDate = e.target.value; kvSet('settings', settings); };
   $('#np').onchange = e => { settings.newPerDay = Math.max(0, +e.target.value || 0); kvSet('settings', settings); };
   $('#hd').onchange = e => { settings.hideDrafts = e.target.checked; kvSet('settings', settings); };
+  $('#hdup').onchange = e => { settings.hideDups = e.target.checked; kvSet('settings', settings); deckBar(); };
+  $('#rdk').value = settings.refDark; $('#rdk').onchange = e => { settings.refDark = e.target.value; kvSet('settings', settings); };
   $('#ex').onclick = exportProgress;
   manualStatus().then(h => { const el = $('#mst'); if (el) el.innerHTML = h; });
   $('#mf').onchange = async e => { const el = $('#mst'); for (const f of e.target.files) { const k = manualKey(f.name); if (!k) { el.textContent = 'Not recognised: ' + f.name; continue; } el.textContent = 'Saving ' + k + '…'; await kvSet('pdf:' + k, await f.arrayBuffer()); delete docs[k]; } el.innerHTML = await manualStatus(); };
@@ -312,15 +423,19 @@ let ref = null; // {src, page, zoom}
 function ensurePdfLib() {
   return window.pdfjsLib ? Promise.resolve() : new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'lib/pdf.min.js'; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
 }
+const refIsDark = () => settings.refDark === 'on' || (settings.refDark === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
 function openRef(src, page) {
-  ref = { src, page: +page, zoom: 1 }; document.body.classList.add('refopen'); renderRef();
+  const list = curRefs.slice(); if (!list.some(r => r.src === src && r.page === +page)) list.push({ src, page: +page, cite: src + ' p.' + page, primary: !list.length });
+  ref = { src, page: +page, zoom: 1, list }; document.body.classList.add('refopen'); renderRef();
 }
 function closeRef() { ref = null; document.body.classList.remove('refopen'); const r = $('#ref'); if (r) r.innerHTML = ''; }
 async function renderRef() {
   if (!ref) return;
   const el = $('#ref'), { src, page } = ref;
-  el.innerHTML = `<div class="rbar"><b>${esc(src)} p.${page}<span id="rn" class="muted"></span></b><span class="rbtns"><button class="small" id="rp">‹</button><button class="small" id="rx">›</button><button class="small" id="rz1">−</button><button class="small" id="rz2">+</button><button class="small" id="rc">✕</button></span></div><div class="rbody" id="rb"><div class="note">Loading…</div></div>`;
-  $('#rc').onclick = closeRef;
+  const dark = refIsDark(); el.classList.toggle('rdark', dark);
+  const chips = ref.list.length > 1 ? `<div class="rchips">${ref.list.map(r => `<button class="chip${r.src === src && r.page === page ? ' on' : ''}" data-open="${esc(r.src)}:${r.page}">${esc(r.src)} p.${r.page}${r.primary ? '' : ' · ' + esc((REL[r.rel] || 'also').toLowerCase())}</button>`).join('')}</div>` : '';
+  el.innerHTML = `<div class="rbar"><b>${esc(src)} p.${page}<span id="rn" class="muted"></span></b><span class="rbtns"><button class="small" id="rp">‹</button><button class="small" id="rx">›</button><button class="small" id="rz1">−</button><button class="small" id="rz2">+</button><button class="small" id="rd" title="Dark / light page">${dark ? '☀' : '☾'}</button><button class="small" id="rc">✕</button></span></div>${chips}<div class="rbody" id="rb"><div class="note">Loading…</div></div>`;
+  $('#rc').onclick = closeRef; $('#rd').onclick = () => { settings.refDark = dark ? 'off' : 'on'; kvSet('settings', settings); renderRef(); };
   try {
     await ensurePdfLib(); const doc = await getDoc(src);
     if (!doc) { $('#rb').innerHTML = `<div class="card"><p>The ${esc(src)} PDF is not loaded on this device.</p><label>Load it now</label><input type="file" id="lf" accept=".pdf,application/pdf"></div>`; $('#lf').onchange = async e => { const f = e.target.files[0]; if (f) { await kvSet('pdf:' + src, await f.arrayBuffer()); delete docs[src]; renderRef(); } }; return; }
@@ -336,7 +451,10 @@ async function renderRef() {
     $('#rb').scrollTop = 0;
   } catch (err) { $('#rb').innerHTML = `<div class="card">Could not show the page: ${esc(err.message)}</div>`; }
 }
-document.addEventListener('click', e => { const b = e.target.closest('[data-open]'); if (b) { const [s, p] = b.dataset.open.split(':'); openRef(s, p); } });
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-open]'); if (!b) return; const [s, p] = b.dataset.open.split(':');
+  if (ref && b.closest('#ref')) { ref.src = s; ref.page = +p; ref.zoom = 1; renderRef(); } else openRef(s, p);
+});
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && ref) closeRef(); if (ref && (e.key === '[' || e.key === ']')) { ref.page += e.key === ']' ? 1 : -1; renderRef(); } });
 let rsz; window.addEventListener('resize', () => { clearTimeout(rsz); rsz = setTimeout(renderRef, 250); });
 
