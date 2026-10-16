@@ -433,6 +433,7 @@ function viewSettings() {
     <label><input type="checkbox" id="hd" ${settings.hideDrafts ? 'checked' : ''}> Hide DRAFT cards</label>
     <label><input type="checkbox" id="hdup" ${settings.hideDups ? 'checked' : ''}> Hide Claude's cards that duplicate one of mine</label>
     <label for="rdk">Manual page viewer</label><select id="rdk"><option value="auto">Dark when the device is dark</option><option value="on">Always dark</option><option value="off">Always light</option></select></div>
+    <div class="card"><b>Library (deck and manuals from GitHub)</b><p class="note" id="lbs"></p><div id="lbui"></div></div>
     <div class="card"><b>Sync between devices</b><p class="note" id="syn"></p><div id="synui"></div></div>
     <div class="card"><b>Duplicates</b><p class="note" id="dupn"></p><div class="row"><button id="dupgo">Review similar cards</button></div></div>
     <div class="card"><b>Your edits</b><p class="note" id="edits"></p></div>
@@ -453,6 +454,31 @@ function viewSettings() {
   $('#hdup').onchange = e => { settings.hideDups = e.target.checked; kvSet('settings', settings); deckBar(); };
   $('#rdk').value = settings.refDark; $('#rdk').onchange = e => { settings.refDark = e.target.value; kvSet('settings', settings); };
   $('#ex').onclick = exportProgress;
+  (() => {
+    const lb = settings.lib, ui = $('#lbui'), st = $('#lbs');
+    if (lb?.repo && lb?.token) {
+      st.innerHTML = `Repo ${esc(lb.repo)}. ${esc(lb.msg || '')}${lb.built ? '<br>Published: ' + esc(lb.built) : ''}`;
+      ui.innerHTML = `<div class="row"><button id="lck">Check now</button><button class="pri" id="ldl">Download updates</button><button id="loff">Turn off here</button></div><div class="prog" style="margin-top:10px;display:none" id="lpg"><i style="width:0"></i></div><p class="note" id="lmsg"></p>`;
+      $('#lck').onclick = async () => { $('#lmsg').textContent = 'Checking…'; await libCheck(); viewSettings(); };
+      $('#ldl').onclick = async () => {
+        if (!libPending.length) await libCheck();
+        if (!libPending.length) { $('#lmsg').textContent = settings.lib.msg; return; }
+        const pg = $('#lpg'); pg.style.display = 'block';
+        try { await libDownload(null, (f, g, t) => { $('#lmsg').textContent = `${f.path}: ${(g / 1048576).toFixed(1)} of ${(t / 1048576).toFixed(1)} MB`; pg.firstChild.style.width = Math.min(100, g / t * 100) + '%'; }); syncBar(); $('#lmsg').textContent = 'Done. ' + settings.lib.msg; deckBar(); } catch (e) { $('#lmsg').textContent = e.message; }
+      };
+      $('#loff').onclick = async () => { settings.lib = null; await kvSet('settings', settings); viewSettings(); };
+    } else {
+      st.textContent = 'Off. The deck and the manual PDFs can come from a private GitHub repo instead of AirDrop. You paste a library code once per device.';
+      ui.innerHTML = `<textarea id="lcode" rows="3" placeholder="Library code" style="font:14px monospace"></textarea><div class="row" style="margin-top:8px"><button class="pri" id="lon">Turn on</button></div><p class="note" id="lmsg"></p>`;
+      $('#lon').onclick = async () => {
+        let o; try { o = JSON.parse(atob($('#lcode').value.trim())); } catch (_) { $('#lmsg').textContent = 'That is not a library code.'; return; }
+        if (!o.r || !o.t) { $('#lmsg').textContent = 'That is not a library code.'; return; }
+        settings.lib = { repo: o.r, token: o.t }; $('#lmsg').textContent = 'Checking…'; const p = await libCheck();
+        if (p === null) { const m = settings.lib.msg; settings.lib = null; await kvSet('settings', settings); $('#lmsg').textContent = m; return; }
+        await kvSet('settings', settings); viewSettings();
+      };
+    }
+  })();
   (() => {
     const sy = settings.sync, ui = $('#synui'), st = $('#syn');
     if (sy?.token && sy?.gist) {
@@ -581,7 +607,7 @@ let syncing = false;
 const ghBase = () => settings.sync?.base || 'https://api.github.com';
 const ghFetch = (path, opt = {}) => fetch(ghBase() + path, { ...opt, headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', Authorization: 'Bearer ' + settings.sync.token, ...(opt.headers || {}) } });
 const cfgOf = () => ({ checkDate: settings.checkDate, newPerDay: settings.newPerDay, hideDrafts: settings.hideDrafts, hideDups: settings.hideDups, t: settings.cfgT || 0 });
-function syncBar(msg) { const el = $('#syncbar'); if (!el) return; el.style.display = settings.sync?.token ? 'block' : 'none'; if (msg) el.textContent = msg; }
+function syncBar(msg) { const el = $('#syncbar'); if (!el) return; if (msg) el.textContent = msg; el.style.display = (settings.sync?.token || msg) ? 'block' : 'none'; }
 async function syncNow(quiet) {
   const sy = settings.sync; if (!sy?.token || !sy?.gist || syncing || !navigator.onLine) return false;
   syncing = true; syncBar('↻ syncing…');
@@ -621,6 +647,49 @@ async function syncJoin(code) {
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') syncNow(true); });
 
+// ---------- library: the deck and the manuals, downloaded from a PRIVATE GitHub repo with a read-only token ----------
+const libBase = () => settings.lib?.base || 'https://api.github.com';
+const libGet = path => fetch(`${libBase()}/repos/${settings.lib.repo}/contents/${path}?ref=main`, { headers: { Authorization: 'Bearer ' + settings.lib.token, Accept: 'application/vnd.github.raw+json', 'X-GitHub-Api-Version': '2022-11-28' } });
+async function libBytes(path, onProgress) {
+  const r = await libGet(path); if (!r.ok) throw new Error(`${path}: GitHub answered ${r.status}${r.status === 404 ? ' (not found, or the token cannot read this repo)' : r.status === 401 ? ' (token not accepted)' : ''}`);
+  const total = +r.headers.get('content-length') || 0; if (!r.body?.getReader) return await r.arrayBuffer();
+  const rd = r.body.getReader(), chunks = []; let got = 0;
+  for (;;) { const { done, value } = await rd.read(); if (done) break; chunks.push(value); got += value.length; onProgress?.(got, total); }
+  const out = new Uint8Array(got); let o = 0; for (const c of chunks) { out.set(c, o); o += c.length; } return out.buffer;
+}
+const sha256 = async buf => [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))].map(b => b.toString(16).padStart(2, '0')).join('');
+const libKey = p => p === 'deck.json' ? 'deck' : 'pdf:' + p.replace(/^.*\//, '').replace(/\.pdf$/i, '').toUpperCase();
+let libPending = [];
+async function libCheck() {
+  if (!settings.lib?.repo || !navigator.onLine) return null;
+  try {
+    const m = JSON.parse(new TextDecoder().decode(await libBytes('manifest.json'))), have = settings.libHave || {};
+    libPending = Object.entries(m.files).filter(([p, f]) => have[p] !== f.sha).map(([p, f]) => ({ path: p, sha: f.sha, size: f.size }));
+    settings.lib.msg = libPending.length ? `${libPending.length} update${libPending.length > 1 ? 's' : ''} available (${(libPending.reduce((s, f) => s + f.size, 0) / 1048576).toFixed(1)} MB)` : 'Library is up to date.'; settings.lib.built = m.built; await kvSet('settings', settings);
+    return libPending;
+  } catch (e) { settings.lib.msg = 'Could not check: ' + e.message; return null; }
+}
+async function libDownload(paths, onProgress) {
+  settings.libHave ||= {};
+  for (const f of libPending.filter(f => !paths || paths.includes(f.path))) {
+    const buf = await libBytes(f.path, (g, t) => onProgress?.(f, g, t || f.size));
+    if (await sha256(buf) !== f.sha) throw new Error(f.path + ': download did not match its checksum; try again');
+    if (f.path === 'deck.json') { const d = JSON.parse(new TextDecoder().decode(buf)); if (!Array.isArray(d.cards)) throw new Error('deck.json has no cards'); deck = d; await kvSet('deck', d); }
+    else { const k = libKey(f.path); await kvSet(k, buf); delete docs[k.slice(4)]; }
+    settings.libHave[f.path] = f.sha; await kvSet('settings', settings);
+  }
+  libPending = libPending.filter(f => paths && !paths.includes(f.path));
+  settings.lib.msg = libPending.length ? `${libPending.length} update(s) still to download` : 'Library is up to date.'; await kvSet('settings', settings);
+}
+// on open: check; the deck (small) updates by itself, the manuals wait for a tap in Settings
+async function libAuto() {
+  const p = await libCheck(); if (!p?.length) return false;
+  const d = p.find(f => f.path === 'deck.json'); let changed = false;
+  if (d) { try { await libDownload(['deck.json']); changed = true; } catch (e) { settings.lib.msg = e.message; } }
+  const rest = libPending.filter(f => f.path !== 'deck.json'); if (rest.length) syncBar(`Library update available (${(rest.reduce((s, f) => s + f.size, 0) / 1048576).toFixed(0)} MB): Settings → Library`);
+  return changed;
+}
+
 // ---------- boot ----------
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.dataset.tab));
 (async () => {
@@ -633,4 +702,5 @@ document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   show('study'); syncBar();
   syncNow(true).then(changed => { if (changed && !S) show(tab); });
+  libAuto().then(changed => { if (changed && !S) show(tab); });
 })();
