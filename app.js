@@ -239,6 +239,7 @@ function viewStudy() {
     return;
   }
   if (S.i >= S.queue.length) {
+    syncNow(true);
     $('#main').innerHTML = `<div class="card"><div class="q">Session done</div><p class="muted">${S.done} answers.</p><button class="pri" id="fin">Back</button></div>`;
     $('#fin').onclick = () => { S = null; viewStudy(); }; return;
   }
@@ -432,6 +433,7 @@ function viewSettings() {
     <label><input type="checkbox" id="hd" ${settings.hideDrafts ? 'checked' : ''}> Hide DRAFT cards</label>
     <label><input type="checkbox" id="hdup" ${settings.hideDups ? 'checked' : ''}> Hide Claude's cards that duplicate one of mine</label>
     <label for="rdk">Manual page viewer</label><select id="rdk"><option value="auto">Dark when the device is dark</option><option value="on">Always dark</option><option value="off">Always light</option></select></div>
+    <div class="card"><b>Sync between devices</b><p class="note" id="syn"></p><div id="synui"></div></div>
     <div class="card"><b>Duplicates</b><p class="note" id="dupn"></p><div class="row"><button id="dupgo">Review similar cards</button></div></div>
     <div class="card"><b>Your edits</b><p class="note" id="edits"></p></div>
     <div class="card"><b>Progress</b><p class="note">${events.length} events · device ${esc(settings.device)}. Export from one device, import on another. Merging is safe to repeat.</p>
@@ -445,12 +447,28 @@ function viewSettings() {
       deck = d; await kvSet('deck', deck); viewSettings(); $('#msg').textContent = 'Deck loaded.';
     } catch (err) { $('#msg').textContent = 'Not a valid deck: ' + err.message; }
   };
-  $('#cd').onchange = e => { settings.checkDate = e.target.value; kvSet('settings', settings); };
-  $('#np').onchange = e => { settings.newPerDay = Math.max(0, +e.target.value || 0); kvSet('settings', settings); };
+  $('#cd').onchange = e => { settings.checkDate = e.target.value; settings.cfgT = Date.now(); kvSet('settings', settings); };
+  $('#np').onchange = e => { settings.newPerDay = Math.max(0, +e.target.value || 0); settings.cfgT = Date.now(); kvSet('settings', settings); };
   $('#hd').onchange = e => { settings.hideDrafts = e.target.checked; kvSet('settings', settings); };
   $('#hdup').onchange = e => { settings.hideDups = e.target.checked; kvSet('settings', settings); deckBar(); };
   $('#rdk').value = settings.refDark; $('#rdk').onchange = e => { settings.refDark = e.target.value; kvSet('settings', settings); };
   $('#ex').onclick = exportProgress;
+  (() => {
+    const sy = settings.sync, ui = $('#synui'), st = $('#syn');
+    if (sy?.token && sy?.gist) {
+      st.innerHTML = `Sync is on. ${esc(sy.msg || '')}${sy.last ? '<br>Last sync: ' + new Date(sy.last).toLocaleString() : ''}<br>It runs when you open the app, when you leave it and when a session ends.`;
+      ui.innerHTML = `<div class="row"><button class="pri" id="sgo">Sync now</button><button id="scode">Show sync code</button><button id="soff">Turn off here</button></div><textarea id="sbox" rows="3" readonly style="display:none;margin-top:8px"></textarea>`;
+      $('#sgo').onclick = async () => { await syncNow(false); viewSettings(); };
+      $('#scode').onclick = () => { const b = $('#sbox'); b.style.display = 'block'; b.value = btoa(JSON.stringify({ t: sy.token, g: sy.gist })); b.select(); };
+      $('#soff').onclick = async () => { settings.sync = null; await kvSet('settings', settings); syncBar(); viewSettings(); };
+    } else {
+      st.innerHTML = 'Sync is off. Your progress, discards, spelling and duplicate choices would travel through a private GitHub gist (no manual text). Only one device studies at a time, so no conflicts to worry about.';
+      ui.innerHTML = `<label><b>First device</b></label><p class="note">Make a token that can only touch gists: <a href="https://github.com/settings/tokens/new?scopes=gist&description=Upgrade%20Cards%20sync" target="_blank" rel="noopener">github.com/settings/tokens/new</a> (tick only “gist”), paste it here.</p><input type="password" id="stok" placeholder="ghp_…" autocomplete="off" style="width:100%;font:16px monospace;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg)"><div class="row" style="margin-top:8px"><button class="pri" id="smk">Turn on sync</button></div>
+        <label style="margin-top:16px"><b>Other devices</b></label><p class="note">Paste the sync code from the first device (Settings → Show sync code).</p><textarea id="scd" rows="3" placeholder="Sync code" style="font:14px monospace"></textarea><div class="row" style="margin-top:8px"><button class="pri" id="sjn">Join</button></div><p class="note" id="smsg"></p>`;
+      $('#smk').onclick = async () => { const t = $('#stok').value.trim(); if (!t) return; $('#smsg').textContent = 'Setting up…'; try { const code = await syncCreate(t); syncBar('✓ synced'); viewSettings(); $('#syn').innerHTML += `<br><b>Copy this sync code to your other devices:</b>`; const b = $('#sbox'); b.style.display = 'block'; b.value = code; b.select(); } catch (e) { $('#smsg').textContent = e.message; } };
+      $('#sjn').onclick = async () => { const c = $('#scd').value.trim(); if (!c) return; $('#smsg').textContent = 'Joining…'; try { await syncJoin(c); show('settings'); } catch (e) { $('#smsg').textContent = e.message; } };
+    }
+  })();
   (() => {
     const all = allPairs(), chosen = all.filter(p => (derive(), _dupc[p.cl.id + '|' + p.me.id])).length;
     $('#dupn').textContent = `${all.length} of Claude's cards are similar to one of yours; you have chosen on ${chosen}. Cards you haven't chosen on follow the "hide duplicates" setting above.`;
@@ -558,6 +576,51 @@ document.addEventListener('click', e => {
 });
 let rsz; window.addEventListener('resize', () => { clearTimeout(rsz); rsz = setTimeout(renderRef, 250); });
 
+// ---------- sync between devices: a private GitHub gist holds the event log (progress only, no manual text) ----------
+let syncing = false;
+const ghBase = () => settings.sync?.base || 'https://api.github.com';
+const ghFetch = (path, opt = {}) => fetch(ghBase() + path, { ...opt, headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', Authorization: 'Bearer ' + settings.sync.token, ...(opt.headers || {}) } });
+const cfgOf = () => ({ checkDate: settings.checkDate, newPerDay: settings.newPerDay, hideDrafts: settings.hideDrafts, hideDups: settings.hideDups, t: settings.cfgT || 0 });
+function syncBar(msg) { const el = $('#syncbar'); if (!el) return; el.style.display = settings.sync?.token ? 'block' : 'none'; if (msg) el.textContent = msg; }
+async function syncNow(quiet) {
+  const sy = settings.sync; if (!sy?.token || !sy?.gist || syncing || !navigator.onLine) return false;
+  syncing = true; syncBar('↻ syncing…');
+  try {
+    const r = await ghFetch('/gists/' + sy.gist); if (!r.ok) throw new Error('GitHub answered ' + r.status);
+    const g = await r.json(), f = g.files?.['progress.json']; let remote = { events: [] };
+    if (f) remote = JSON.parse(f.truncated ? await (await fetch(f.raw_url)).text() : f.content);
+    const have = new Set(events.map(e => e.id)), add = (remote.events || []).filter(e => e.id && !have.has(e.id));
+    if (add.length) { events.push(...add); await save(); }
+    let cfgPulled = false;
+    if (remote.cfg && remote.cfg.t > (settings.cfgT || 0)) { const c = remote.cfg; Object.assign(settings, { checkDate: c.checkDate ?? settings.checkDate, newPerDay: c.newPerDay ?? settings.newPerDay, hideDrafts: !!c.hideDrafts, hideDups: c.hideDups !== false, cfgT: c.t }); cfgPulled = true; }
+    const rids = new Set((remote.events || []).map(e => e.id)), push = events.some(e => !rids.has(e.id)) || (settings.cfgT || 0) > (remote.cfg?.t || 0);
+    if (push) {
+      const p = await ghFetch('/gists/' + sy.gist, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files: { 'progress.json': { content: JSON.stringify({ v: 1, events, cfg: cfgOf() }) } } }) });
+      if (!p.ok) throw new Error('GitHub answered ' + p.status);
+    }
+    sy.last = Date.now(); sy.msg = `Synced: got ${add.length} new, ${push ? 'sent yours' : 'nothing to send'}.`; await kvSet('settings', settings);
+    syncBar('✓ synced'); syncing = false;
+    return add.length > 0 || cfgPulled;
+  } catch (e) {
+    sy.msg = 'Could not sync: ' + e.message; syncBar('sync failed (studying offline is fine)'); syncing = false; return false;
+  }
+}
+async function syncCreate(token) {
+  settings.sync = { token: token.trim() };
+  const r = await ghFetch('/gists', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: 'Upgrade Cards progress (no manual text)', public: false, files: { 'progress.json': { content: JSON.stringify({ v: 1, events, cfg: cfgOf() }) } } }) });
+  if (!r.ok) { settings.sync = null; throw new Error('GitHub answered ' + r.status + (r.status === 401 ? ' (token not accepted)' : r.status === 404 || r.status === 403 ? ' (token needs the gist scope)' : '')); }
+  const g = await r.json(); settings.sync.gist = g.id; settings.sync.last = Date.now(); settings.sync.msg = 'Sync is on.'; await kvSet('settings', settings);
+  return btoa(JSON.stringify({ t: settings.sync.token, g: g.id }));
+}
+async function syncJoin(code) {
+  let o; try { o = JSON.parse(atob(code.trim())); } catch (_) { throw new Error('That is not a sync code'); }
+  if (!o.t || !o.g) throw new Error('That is not a sync code');
+  settings.sync = { token: o.t, gist: o.g }; await kvSet('settings', settings);
+  const changed = await syncNow(true); if (!settings.sync.last) { const m = settings.sync.msg; settings.sync = null; await kvSet('settings', settings); throw new Error(m || 'Could not reach the sync'); }
+  return changed;
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') syncNow(true); });
+
 // ---------- boot ----------
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.dataset.tab));
 (async () => {
@@ -568,5 +631,6 @@ document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.
   if (!settings.device) { settings.device = 'd' + uid().slice(0, 5); await kvSet('settings', settings); }
   navigator.storage?.persist?.();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-  show('study');
+  show('study'); syncBar();
+  syncNow(true).then(changed => { if (changed && !S) show(tab); });
 })();

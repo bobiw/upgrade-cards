@@ -135,3 +135,6 @@ s{color:var(--bad)}
 .dcard{margin-bottom:8px;padding-bottom:8px;border-bottom:1px dashed var(--line)}
 .dcard b{font-size:13px;color:var(--mut);text-transform:uppercase;letter-spacing:.03em}
 .row2 .small.on{background:var(--acc);border-color:var(--acc);color:#fff}
+
+#syncbar{display:none;max-width:720px;margin:0 auto;padding:0 16px 6px;font-size:12px;color:var(--mut)}
+@media (min-width:760px){#syncbar{max-width:900px;padding:0 32px 6px}}
