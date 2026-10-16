@@ -141,3 +141,7 @@ s{color:var(--bad)}
 
 .fig.dark{background:#0b0f14}
 .fig.dark canvas{filter:invert(.92) hue-rotate(180deg) contrast(.95)}
+
+#libprompt{display:none;max-width:720px;margin:0 auto;padding:6px 16px 8px;gap:8px;align-items:center;flex-wrap:wrap;font-size:14px;background:var(--card);border-top:1px solid var(--line)}
+#libprompt span{flex:1;min-width:160px}
+@media (min-width:760px){#libprompt{max-width:900px;padding:6px 32px 8px}}

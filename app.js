@@ -457,26 +457,28 @@ function viewSettings() {
   (() => {
     const lb = settings.lib, ui = $('#lbui'), st = $('#lbs');
     if (lb?.repo && lb?.token) {
-      st.innerHTML = `Repo ${esc(lb.repo)}. ${esc(lb.msg || '')}${lb.built ? '<br>Published: ' + esc(lb.built) : ''}`;
-      ui.innerHTML = `<div class="row"><button id="lck">Check now</button><button class="pri" id="ldl">Download updates</button><button id="loff">Turn off here</button></div><div class="prog" style="margin-top:10px;display:none" id="lpg"><i style="width:0"></i></div><p class="note" id="lmsg"></p>`;
-      $('#lck').onclick = async () => { $('#lmsg').textContent = 'Checking…'; await libCheck(); viewSettings(); };
+      st.innerHTML = `Repo ${esc(lb.repo)}. ${esc(lb.msg || '')}${lb.built ? '<br>Published: ' + esc(lb.built) : ''}${lb.checked ? '<br>Last checked: ' + new Date(lb.checked).toLocaleString() : ''}<br>The app checks once a day when you open it and asks before downloading.`;
+      ui.innerHTML = `<div class="row"><button class="pri" id="ldl">Check and download now</button><button id="lcode">Show library code</button><button id="loff">Turn off here</button></div><div class="prog" style="margin-top:10px;display:none" id="lpg"><i style="width:0"></i></div><p class="note" id="lmsg"></p><textarea id="lbox" rows="3" readonly style="display:none"></textarea>`;
       $('#ldl').onclick = async () => {
-        if (!libPending.length) await libCheck();
-        if (!libPending.length) { $('#lmsg').textContent = settings.lib.msg; return; }
+        $('#lmsg').textContent = 'Checking…'; const p = await libCheck(); settings.lib.checked = Date.now(); await kvSet('settings', settings);
+        if (p === null) { $('#lmsg').textContent = settings.lib.msg; return; }
+        if (!p.length) { $('#lmsg').textContent = 'Already up to date.'; return; }
         const pg = $('#lpg'); pg.style.display = 'block';
-        try { await libDownload(null, (f, g, t) => { $('#lmsg').textContent = `${f.path}: ${(g / 1048576).toFixed(1)} of ${(t / 1048576).toFixed(1)} MB`; pg.firstChild.style.width = Math.min(100, g / t * 100) + '%'; }); syncBar(); $('#lmsg').textContent = 'Done. ' + settings.lib.msg; deckBar(); } catch (e) { $('#lmsg').textContent = e.message; }
+        try { await libDownload(null, (f, g, t) => { $('#lmsg').textContent = `${f.path}: ${(g / 1048576).toFixed(1)} of ${(t / 1048576).toFixed(1)} MB`; pg.firstChild.style.width = Math.min(100, g / t * 100) + '%'; }); const el = $('#libprompt'); if (el) el.style.display = 'none'; $('#lmsg').textContent = 'Done. ' + settings.lib.msg; deckBar(); } catch (e) { $('#lmsg').textContent = e.message; }
       };
+      $('#lcode').onclick = () => { const b = $('#lbox'); b.style.display = 'block'; b.value = btoa(JSON.stringify({ r: lb.repo, t: lb.token })); b.select(); };
       $('#loff').onclick = async () => { settings.lib = null; await kvSet('settings', settings); viewSettings(); };
     } else {
-      st.textContent = 'Off. The deck and the manual PDFs can come from a private GitHub repo instead of AirDrop. You paste a library code once per device.';
-      ui.innerHTML = `<textarea id="lcode" rows="3" placeholder="Library code" style="font:14px monospace"></textarea><div class="row" style="margin-top:8px"><button class="pri" id="lon">Turn on</button></div><p class="note" id="lmsg"></p>`;
-      $('#lon').onclick = async () => {
-        let o; try { o = JSON.parse(atob($('#lcode').value.trim())); } catch (_) { $('#lmsg').textContent = 'That is not a library code.'; return; }
-        if (!o.r || !o.t) { $('#lmsg').textContent = 'That is not a library code.'; return; }
-        settings.lib = { repo: o.r, token: o.t }; $('#lmsg').textContent = 'Checking…'; const p = await libCheck();
+      st.textContent = 'Off. The deck and the manual PDFs can come from a private GitHub repo instead of AirDrop. Checks once a day and asks before it downloads.';
+      ui.innerHTML = `<label><b>First device</b></label><p class="note">Make a read-only token for the repo: <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">github.com/settings/personal-access-tokens/new</a>. Choose “Only select repositories” → upgrade-cards-data, Repository permissions → Contents: Read-only. Paste it here.</p><input type="password" id="ltok" placeholder="github_pat_…" autocomplete="off" style="width:100%;font:16px monospace;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg)"><div class="row" style="margin-top:8px"><button class="pri" id="lon1">Turn on</button></div>
+        <label style="margin-top:16px"><b>Other devices</b></label><p class="note">Paste the library code from the first device (Settings → Library → Show library code).</p><textarea id="lcode2" rows="3" placeholder="Library code" style="font:14px monospace"></textarea><div class="row" style="margin-top:8px"><button class="pri" id="lon2">Join</button></div><p class="note" id="lmsg"></p>`;
+      const turnOn = async (repo, token) => {
+        settings.lib = { repo, token }; $('#lmsg').textContent = 'Checking…'; const p = await libCheck();
         if (p === null) { const m = settings.lib.msg; settings.lib = null; await kvSet('settings', settings); $('#lmsg').textContent = m; return; }
-        await kvSet('settings', settings); viewSettings();
+        settings.lib.checked = Date.now(); await kvSet('settings', settings); viewSettings(); if (p.length) libPrompt();
       };
+      $('#lon1').onclick = () => { const t = $('#ltok').value.trim(); if (t) turnOn('bobiw/upgrade-cards-data', t); };
+      $('#lon2').onclick = () => { let o; try { o = JSON.parse(atob($('#lcode2').value.trim())); } catch (_) {} if (!o?.r || !o?.t) { $('#lmsg').textContent = 'That is not a library code.'; return; } turnOn(o.r, o.t); };
     }
   })();
   (() => {
@@ -681,13 +683,22 @@ async function libDownload(paths, onProgress) {
   libPending = libPending.filter(f => paths && !paths.includes(f.path));
   settings.lib.msg = libPending.length ? `${libPending.length} update(s) still to download` : 'Library is up to date.'; await kvSet('settings', settings);
 }
-// on open: check; the deck (small) updates by itself, the manuals wait for a tap in Settings
-async function libAuto() {
-  const p = await libCheck(); if (!p?.length) return false;
-  const d = p.find(f => f.path === 'deck.json'); let changed = false;
-  if (d) { try { await libDownload(['deck.json']); changed = true; } catch (e) { settings.lib.msg = e.message; } }
-  const rest = libPending.filter(f => f.path !== 'deck.json'); if (rest.length) syncBar(`Library update available (${(rest.reduce((s, f) => s + f.size, 0) / 1048576).toFixed(0)} MB): Settings → Library`);
-  return changed;
+// once a day (when the app opens) check for updates and ASK; nothing downloads unless B taps Download
+async function libDaily(force) {
+  if (!settings.lib?.repo || !navigator.onLine) return;
+  const last = settings.lib.checked || 0; if (!force && Date.now() - last < 864e5) return;
+  const p = await libCheck(); settings.lib.checked = Date.now(); await kvSet('settings', settings);
+  if (p?.length) libPrompt();
+}
+function libPrompt() {
+  let el = $('#libprompt'); if (!el) { el = document.createElement('div'); el.id = 'libprompt'; document.querySelector('header').appendChild(el); }
+  const mb = (libPending.reduce((s, f) => s + f.size, 0) / 1048576).toFixed(1), names = libPending.map(f => f.path.replace(/^pdf\//, '').replace(/\.pdf$/, '')).join(', ');
+  el.innerHTML = `<span>Library update: ${esc(names)} (${mb} MB)</span> <button class="small pri" id="lpy">Download</button><button class="small" id="lpn">Later</button>`; el.style.display = 'flex';
+  $('#lpn').onclick = () => { el.style.display = 'none'; };
+  $('#lpy').onclick = async () => {
+    el.innerHTML = '<span id="lpt">Downloading…</span>';
+    try { await libDownload(null, (f, g, t) => { $('#lpt').textContent = `${f.path}: ${(g / 1048576).toFixed(1)} of ${(t / 1048576).toFixed(1)} MB`; }); el.style.display = 'none'; deckBar(); if (!S) show(tab); } catch (e) { el.innerHTML = `<span>${esc(e.message)}</span> <button class="small" id="lpn2">Close</button>`; $('#lpn2').onclick = () => { el.style.display = 'none'; }; }
+  };
 }
 
 // ---------- boot ----------
@@ -702,5 +713,5 @@ document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   show('study'); syncBar();
   syncNow(true).then(changed => { if (changed && !S) show(tab); });
-  libAuto().then(changed => { if (changed && !S) show(tab); });
+  libDaily(false);
 })();
