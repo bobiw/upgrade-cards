@@ -138,3 +138,6 @@ s{color:var(--bad)}
 
 #syncbar{display:none;max-width:720px;margin:0 auto;padding:0 16px 6px;font-size:12px;color:var(--mut)}
 @media (min-width:760px){#syncbar{max-width:900px;padding:0 32px 6px}}
+
+.fig.dark{background:#0b0f14}
+.fig.dark canvas{filter:invert(.92) hue-rotate(180deg) contrast(.95)}

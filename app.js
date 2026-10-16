@@ -215,7 +215,7 @@ async function showFigs(c) {
       const cv = document.createElement('canvas'); cv.width = box.w * scale * d; cv.height = box.h * scale * d; cv.style.width = '100%'; cv.style.height = 'auto';
       const vp = pg.getViewport({ scale, offsetX: -box.x * scale, offsetY: -box.y * scale });
       await pg.render({ canvasContext: cv.getContext('2d'), viewport: vp, transform: d !== 1 ? [d, 0, 0, d, 0, 0] : null }).promise;
-      const fig = document.createElement('div'); fig.className = 'fig'; fig.dataset.open = r.src + ':' + r.page;
+      const fig = document.createElement('div'); fig.className = 'fig' + (refIsDark() ? ' dark' : ''); fig.dataset.open = r.src + ':' + r.page;
       fig.innerHTML = `<div class="rn">Diagram · ${esc(r.rel === 'diagram' ? r.cite + ' · ' + r.src + ' p.' + r.page : (r.cite || r.src + ' p.' + r.page))} · tap to open the page</div>`; fig.appendChild(cv); el.appendChild(fig); shown++;
     } catch (_) { /* no PDF or page: skip quietly */ }
   }
@@ -538,7 +538,7 @@ async function renderRef() {
   const dark = refIsDark(); el.classList.toggle('rdark', dark);
   const chips = ref.list.length > 1 ? `<div class="rchips">${ref.list.map(r => `<button class="chip${r.src === src && r.page === page ? ' on' : ''}" data-open="${esc(r.src)}:${r.page}">${esc(r.src)} p.${r.page}${r.primary ? '' : ' · ' + esc((REL[r.rel] || 'also').toLowerCase())}</button>`).join('')}</div>` : '';
   el.innerHTML = `<div class="rbar"><b>${esc(src)} p.${page}<span id="rn" class="muted"></span></b><span class="rbtns"><button class="small" id="rp">‹</button><button class="small" id="rx">›</button><button class="small" id="rz1">−</button><button class="small" id="rz2">+</button><button class="small" id="rd" title="Dark / light page">${dark ? '☀' : '☾'}</button><button class="small" id="rc">✕</button></span></div>${chips}<div class="rbody" id="rb"><div class="note">Loading…</div></div>`;
-  $('#rc').onclick = closeRef; $('#rd').onclick = () => { settings.refDark = dark ? 'off' : 'on'; kvSet('settings', settings); renderRef(); };
+  $('#rc').onclick = closeRef; $('#rd').onclick = () => { settings.refDark = dark ? 'off' : 'on'; kvSet('settings', settings); document.querySelectorAll('.fig').forEach(f => f.classList.toggle('dark', !dark)); renderRef(); };
   try {
     await ensurePdfLib(); const doc = await getDoc(src);
     if (!doc) { $('#rb').innerHTML = `<div class="card"><p>The ${esc(src)} PDF is not loaded on this device.</p><label>Load it now</label><input type="file" id="lf" accept=".pdf,application/pdf"></div>`; $('#lf').onchange = async e => { const f = e.target.files[0]; if (f) { await kvSet('pdf:' + src, await f.arrayBuffer()); delete docs[src]; renderRef(); } }; return; }
