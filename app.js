@@ -124,17 +124,18 @@ const hasList = s => /(^|\n)\s*(?:[-•*]\s+|\d{1,2}[.)]\s*(?=\D))/.test(String(
 const ans = s => `<div class="ans${hasList(s) ? ' list' : ''}">${rich(s)}</div>`;
 
 let curRefs = [];
-const REL = { same: 'Also says', adds: 'Adds', conflicts: 'Differs', suggested: 'Suggested answer' };
+const REL = { same: 'Also says', adds: 'Adds', conflicts: 'Differs', suggested: 'Suggested answer', diagram: 'Diagram' };
 function refsOf(c) {
   const r = [];
   if (c.src && c.page && !c.nosrc) r.push({ src: c.src, page: c.page, cite: c.cite, quote: (c.quotes || []).join(' … '), primary: true });
   for (const x of c.also || []) r.push({ ...x });
+  for (const d of c.diagrams || []) r.push({ src: d.src, page: d.page, cite: d.title && d.title !== 'Diagram' ? d.title : 'Diagram', rel: 'diagram' });
   if (c.suggest?.src) r.push({ src: c.suggest.src, page: c.suggest.page, cite: c.suggest.cite, quote: (c.suggest.quotes || []).join(' … '), rel: 'suggested' });
   return r;
 }
 function srcBlock(c) {
   curRefs = refsOf(c);
-  const row = r => `<div class="ref${r.primary ? ' pri' : ''}"><div class="rh">${r.primary ? '' : `<span class="tag ${r.rel === 'conflicts' ? 'draft' : ''}">${REL[r.rel] || 'Also'}</span> `}<b>${esc(r.cite || r.src + ' p.' + r.page)}</b>${r.primary ? ' · ' + esc(deck.meta.revs?.[r.src] || '') : ''} <button class="small" data-open="${esc(r.src)}:${r.page}">Open page ${r.page}</button></div>${r.note ? `<div class="rn">${esc(r.note)}</div>` : ''}${r.quote ? `<q>${esc(r.quote)}</q>` : ''}</div>`;
+  const row = r => r.rel === 'diagram' ? `<div class="ref"><div class="rh"><span class="tag">Diagram</span> <b>${esc(r.cite)}</b> · ${esc(r.src)} p.${r.page} <button class="small" data-open="${esc(r.src)}:${r.page}">Open diagram</button></div></div>` : `<div class="ref${r.primary ? ' pri' : ''}"><div class="rh">${r.primary ? '' : `<span class="tag ${r.rel === 'conflicts' ? 'draft' : ''}">${REL[r.rel] || 'Also'}</span> `}<b>${esc(r.cite || r.src + ' p.' + r.page)}</b>${r.primary ? ' · ' + esc(deck.meta.revs?.[r.src] || '') : ''} <button class="small" data-open="${esc(r.src)}:${r.page}">Open page ${r.page}</button></div>${r.note ? `<div class="rn">${esc(r.note)}</div>` : ''}${r.quote ? `<q>${esc(r.quote)}</q>` : ''}</div>`;
   const shown = curRefs.filter(r => r.rel !== 'suggested');
   const none = !shown.length ? `<div class="ref muted">${esc(c.nolib || 'No source page is attached to this card.')}</div>` : '';
   return `<div class="src">${shown.map(row).join('')}${none}${c.note ? `<div class="rn" style="margin-top:8px">${esc(c.note)}</div>` : ''}</div>`;
@@ -188,17 +189,20 @@ async function figBox(pg, key) {
 async function showFigs(c) {
   const el = document.getElementById('figs'); if (!el || el.dataset.done) return; el.dataset.done = 1;
   let shown = 0;
-  for (const r of refsOf(c).filter(r => r.rel !== 'suggested')) {
+  const rs = refsOf(c).filter(r => r.rel !== 'suggested'), list = rs.filter(r => r.rel === 'diagram').concat(rs.filter(r => r.rel !== 'diagram'));
+  for (const r of list) {
     if (shown >= 2) break;
     try {
       await ensurePdfLib(); const doc = await getDoc(r.src); if (!doc) continue;
-      const pg = await doc.getPage(r.page), box = await figBox(pg, r.src + ':' + r.page); if (!box) continue;
+      const pg = await doc.getPage(r.page); let box = await figBox(pg, r.src + ':' + r.page);
+      if (!box && r.rel === 'diagram') { const v = pg.getViewport({ scale: 1 }); box = { x: 0, y: 0, w: v.width, h: v.height }; }
+      if (!box) continue;
       const w = Math.max(220, el.clientWidth), scale = Math.min(3, w / box.w), d = window.devicePixelRatio || 1;
       const cv = document.createElement('canvas'); cv.width = box.w * scale * d; cv.height = box.h * scale * d; cv.style.width = '100%'; cv.style.height = 'auto';
       const vp = pg.getViewport({ scale, offsetX: -box.x * scale, offsetY: -box.y * scale });
       await pg.render({ canvasContext: cv.getContext('2d'), viewport: vp, transform: d !== 1 ? [d, 0, 0, d, 0, 0] : null }).promise;
       const fig = document.createElement('div'); fig.className = 'fig'; fig.dataset.open = r.src + ':' + r.page;
-      fig.innerHTML = `<div class="rn">Diagram · ${esc(r.cite || r.src + ' p.' + r.page)} · tap to open the page</div>`; fig.appendChild(cv); el.appendChild(fig); shown++;
+      fig.innerHTML = `<div class="rn">Diagram · ${esc(r.rel === 'diagram' ? r.cite + ' · ' + r.src + ' p.' + r.page : (r.cite || r.src + ' p.' + r.page))} · tap to open the page</div>`; fig.appendChild(cv); el.appendChild(fig); shown++;
     } catch (_) { /* no PDF or page: skip quietly */ }
   }
 }
