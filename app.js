@@ -56,7 +56,18 @@ const endOfToday = () => { const d = new Date(); d.setHours(23, 59, 59, 999); re
 const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString();
 const deckOf = c => c.deck || (c.id.startsWith('raw-') ? 'mine' : 'claude');
 const DECKS = [['mine', 'My cards'], ['claude', "Claude's cards"], ['all', 'All']];
-const visible = c => c.check !== 'fail' && !(settings.hideDups && deckOf(c) === 'claude' && c.dup?.some(d => d.sim >= .6));
+let _dk = -1, _dset = new Set(), _spell = {};
+function derive() {
+  if (_dk === events.length) return; _dk = events.length;
+  const d = {}, sp = {};
+  for (const e of events.slice().sort(byTime)) { if (e.k === 'drop') d[e.c] = e.v; else if (e.k === 'spell') (sp[e.c] ||= {})[e.bad] = e.v; }
+  _dset = new Set(Object.keys(d).filter(k => d[k])); _spell = sp;
+}
+const isDropped = id => { derive(); return _dset.has(id); };
+const spellOf = id => { derive(); return _spell[id] || {}; };
+// the card's text with the spelling fixes B approved applied
+function textOf(c, f) { let t = c[f] ?? ''; const m = spellOf(c.id); for (const s of c.spell || []) if (m[s.bad] === 'ok') t = t.split(s.bad).join(s.good); return t; }
+const visible = c => !isDropped(c.id) && c.check !== 'fail' && !(settings.hideDups && deckOf(c) === 'claude' && c.dup?.some(d => d.sim >= .6));
 const pool = () => deck.cards.filter(c => visible(c) && !(settings.hideDrafts && c.review === 'draft') && (settings.deck === 'all' || deckOf(c) === settings.deck));
 
 function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; }
@@ -133,12 +144,21 @@ function dupNote(c) {
   if (deckOf(c) === 'claude' && c.dup?.length) return `<div class="alert">Similar to your card: “${esc(c.dup[0].q)}”</div>`;
   return '';
 }
+function spellHtml(c) {
+  const m = spellOf(c.id);
+  return '<b>Spelling</b>' + c.spell.map((s, i) => {
+    const v = m[s.bad], b = `data-c="${esc(c.id)}" data-i="${i}"`;
+    return `<div class="fix">${v === 'ok' ? `<span class="okx">✓ applied</span> <s>${esc(s.bad)}</s> → <b>${esc(s.good)}</b> <button class="mini" data-spell="undo" ${b}>undo</button>`
+      : v === 'no' ? `<span class="muted">dismissed</span> <s>${esc(s.bad)}</s> → ${esc(s.good)} <button class="mini" data-spell="undo" ${b}>undo</button>`
+      : `<s>${esc(s.bad)}</s> → <b>${esc(s.good)}</b> <button class="mini yes" data-spell="ok" ${b} aria-label="approve">✓</button><button class="mini no" data-spell="no" ${b} aria-label="discard">✗</button>`}</div>`;
+  }).join('');
+}
 function mineBlock(c) {
   if (deckOf(c) !== 'mine') return dupNote(c);
   let h = '';
   if (c.status === 'flagged' && c.issue) h += `<div class="alert bad"><b>Check this card.</b> ${esc(c.issue)}</div>`;
   else if (c.status === 'unmatched') h += `<div class="alert">The manual page is ${esc(c.src)} p.${c.page}, but the exact wording couldn't be matched there. Worth a look.</div>`;
-  if (c.spell?.length) h += `<div class="alert">Spelling: ${c.spell.map(s => `<s>${esc(s.bad)}</s> → <b>${esc(s.good)}</b>`).join(', ')}</div>`;
+  if (c.spell?.length) h += `<div class="alert" id="spellbox">${spellHtml(c)}</div>`;
   if (c.suggest?.a) h += `<div class="sugg"><b>Suggested answer</b>${rich(c.suggest.a)}${c.suggest.why ? `<div class="rn">${esc(c.suggest.why)}</div>` : ''}${c.suggest.src ? `<div class="rh"><b>${esc(c.suggest.cite || '')}</b> <button class="small" data-open="${esc(c.suggest.src)}:${c.suggest.page}">Open page ${c.suggest.page}</button></div>${c.suggest.quotes?.length ? `<q>${esc(c.suggest.quotes.join(' … '))}</q>` : ''}` : ''}</div>`;
   else if (c.nolib) h += `<div class="alert">${esc(c.nolib)}</div>`;
   return h + dupNote(c);
@@ -223,9 +243,24 @@ function reveal(c, html) {
   $('#cc').insertAdjacentHTML('beforeend', html + mineBlock(c) + '<div id="figs"></div>' + srcBlock(c)); showFigs(c);
 }
 function flagBtn(c) {
-  return `<button class="small" id="flag" style="margin-top:10px">⚑ Flag this card</button>`;
+  return `<div class="row2"><button class="small" id="flag">⚑ Flag this card</button><button class="small" id="drop">🗑 Not needed</button></div>`;
+}
+function toast(msg, undo) {
+  let t = $('#toast'); if (!t) { t = document.createElement('div'); t.id = 'toast'; document.body.appendChild(t); }
+  t.innerHTML = `${esc(msg)}${undo ? ' <button class="small" id="tundo">Undo</button>' : ''}`; t.classList.add('on');
+  if (undo) $('#tundo').onclick = () => { undo(); t.classList.remove('on'); };
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('on'), 7000);
+}
+function dropCard(c, v) {
+  events.push({ id: uid(), k: 'drop', c: c.id, t: Date.now(), v }); save();
 }
 function wireFlag(c) {
+  const dp = $('#drop');
+  if (dp) dp.onclick = () => {
+    dropCard(c, 1);
+    if (S) { S.queue = S.queue.filter((x, i) => i < S.i || x.id !== c.id); viewStudy(); }
+    toast('Card discarded. It will not come back.', () => { dropCard(c, 0); });
+  };
   const f = $('#flag'); if (!f) return;
   f.onclick = () => { const note = prompt('What is wrong with this card?'); if (note) { events.push({ id: uid(), k: 'flag', c: c.id, t: Date.now(), note }); save(); f.textContent = 'Flagged'; f.disabled = true; } };
 }
@@ -234,7 +269,7 @@ function gradePanel(c, sug) {
   $('#ctl').querySelectorAll('[data-g]').forEach(b => b.onclick = () => done(c, +b.dataset.g));
   wireFlag(c);
 }
-function rFlip(c) { rSwipe(c, `<div class="q">${esc(c.q)}</div>`, ans(c.a)); }
+function rFlip(c) { rSwipe(c, `<div class="q" data-f="q">${esc(textOf(c, 'q'))}</div>`, `<div data-f="a">${ans(textOf(c, 'a'))}</div>`); }
 function rCloze(c) { rSwipe(c, `<div class="q">${cloze(c.q, false)}</div>`, `<div class="q">${cloze(c.q, true)}</div>`); }
 // flip card: tap to flip; drag right = got it, left = missed (buttons and arrow keys do the same)
 function rSwipe(c, front, back) {
@@ -367,6 +402,7 @@ function viewSettings() {
     <label><input type="checkbox" id="hd" ${settings.hideDrafts ? 'checked' : ''}> Hide DRAFT cards</label>
     <label><input type="checkbox" id="hdup" ${settings.hideDups ? 'checked' : ''}> Hide Claude's cards that duplicate one of mine</label>
     <label for="rdk">Manual page viewer</label><select id="rdk"><option value="auto">Dark when the device is dark</option><option value="on">Always dark</option><option value="off">Always light</option></select></div>
+    <div class="card"><b>Your edits</b><p class="note" id="edits"></p></div>
     <div class="card"><b>Progress</b><p class="note">${events.length} events · device ${esc(settings.device)}. Export from one device, import on another. Merging is safe to repeat.</p>
     <div class="row"><button id="ex" class="pri">Export / share</button></div>
     <label for="pf">Import progress file</label><input type="file" id="pf" accept=".json,application/json"><p class="note" id="msg"></p></div>
@@ -384,6 +420,13 @@ function viewSettings() {
   $('#hdup').onchange = e => { settings.hideDups = e.target.checked; kvSet('settings', settings); deckBar(); };
   $('#rdk').value = settings.refDark; $('#rdk').onchange = e => { settings.refDark = e.target.value; kvSet('settings', settings); };
   $('#ex').onclick = exportProgress;
+  (() => {
+    derive(); const dropped = deck.cards.filter(c => _dset.has(c.id)), fixes = [];
+    for (const c of deck.cards) { const m = spellOf(c.id); for (const s of c.spell || []) if (m[s.bad] === 'ok') fixes.push(`${s.bad} → ${s.good}   (${c.q.slice(0, 50)})`); }
+    $('#edits').innerHTML = `<b>${fixes.length}</b> spelling fixes approved${fixes.length ? ` <button class="small" id="cpf">Copy list for my sheets</button><textarea id="fxl" rows="4" readonly style="margin-top:8px">${esc(fixes.join('\\n'))}</textarea>` : ''}<br><b>${dropped.length}</b> cards discarded${dropped.length ? `<div style="margin-top:8px">${dropped.slice(0, 100).map(c => `<div class="fix">${esc(c.q.replace(/\\{\\{c\\d+::(.*?)\\}\\}/g, '$1').slice(0, 80))} <button class="mini" data-restore="${esc(c.id)}">restore</button></div>`).join('')}</div>` : ''}`;
+    if ($('#cpf')) $('#cpf').onclick = () => { $('#fxl').select(); navigator.clipboard?.writeText(fixes.join('\\n')).catch(() => {}); };
+    document.querySelectorAll('[data-restore]').forEach(b => b.onclick = () => { events.push({ id: uid(), k: 'drop', c: b.dataset.restore, t: Date.now(), v: 0 }); save(); viewSettings(); });
+  })();
   manualStatus().then(h => { const el = $('#mst'); if (el) el.innerHTML = h; });
   $('#mf').onchange = async e => { const el = $('#mst'); for (const f of e.target.files) { const k = manualKey(f.name); if (!k) { el.textContent = 'Not recognised: ' + f.name; continue; } el.textContent = 'Saving ' + k + '…'; await kvSet('pdf:' + k, await f.arrayBuffer()); delete docs[k]; } el.innerHTML = await manualStatus(); };
   $('#pf').onchange = async e => {
@@ -456,6 +499,14 @@ document.addEventListener('click', e => {
   if (ref && b.closest('#ref')) { ref.src = s; ref.page = +p; ref.zoom = 1; renderRef(); } else openRef(s, p);
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && ref) closeRef(); if (ref && (e.key === '[' || e.key === ']')) { ref.page += e.key === ']' ? 1 : -1; renderRef(); } });
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-spell]'); if (!b) return;
+  const c = deck.cards.find(x => x.id === b.dataset.c), s = c?.spell?.[+b.dataset.i]; if (!s) return;
+  events.push({ id: uid(), k: 'spell', c: c.id, t: Date.now(), bad: s.bad, v: b.dataset.spell === 'undo' ? null : b.dataset.spell }); save();
+  const box = $('#spellbox'); if (box) box.innerHTML = spellHtml(c);
+  const q = document.querySelector('[data-f="q"]'), an = document.querySelector('[data-f="a"]');
+  if (q) q.textContent = textOf(c, 'q'); if (an) an.innerHTML = ans(textOf(c, 'a'));
+});
 let rsz; window.addEventListener('resize', () => { clearTimeout(rsz); rsz = setTimeout(renderRef, 250); });
 
 // ---------- boot ----------
