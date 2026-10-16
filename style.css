@@ -130,3 +130,8 @@ s{color:var(--bad)}
 #toast.on{opacity:1;transform:translate(-50%,0);pointer-events:auto}
 
 .row2 button:disabled{opacity:.4}
+
+.pair{margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
+.dcard{margin-bottom:8px;padding-bottom:8px;border-bottom:1px dashed var(--line)}
+.dcard b{font-size:13px;color:var(--mut);text-transform:uppercase;letter-spacing:.03em}
+.row2 .small.on{background:var(--acc);border-color:var(--acc);color:#fff}

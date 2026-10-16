@@ -56,18 +56,25 @@ const endOfToday = () => { const d = new Date(); d.setHours(23, 59, 59, 999); re
 const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString();
 const deckOf = c => c.deck || (c.id.startsWith('raw-') ? 'mine' : 'claude');
 const DECKS = [['mine', 'My cards'], ['claude', "Claude's cards"], ['all', 'All']];
-let _dk = -1, _dset = new Set(), _spell = {}, _undone = new Set();
+let _dk = -1, _dset = new Set(), _spell = {}, _undone = new Set(), _dupc = {};
 function derive() {
   if (_dk === events.length) return; _dk = events.length;
-  const d = {}, sp = {}; _undone = new Set(events.filter(e => e.k === 'undo').map(e => e.ref));
-  for (const e of events.slice().sort(byTime)) { if (e.k === 'drop') d[e.c] = e.v; else if (e.k === 'spell') (sp[e.c] ||= {})[e.bad] = e.v; }
-  _dset = new Set(Object.keys(d).filter(k => d[k])); _spell = sp;
+  const d = {}, sp = {}, dc = {}; _undone = new Set(events.filter(e => e.k === 'undo').map(e => e.ref));
+  for (const e of events.slice().sort(byTime)) { if (e.k === 'drop') d[e.c] = e.v; else if (e.k === 'spell') (sp[e.c] ||= {})[e.bad] = e.v; else if (e.k === 'dup') dc[e.c + '|' + e.m] = e.v; }
+  _dset = new Set(Object.keys(d).filter(k => d[k])); _spell = sp; _dupc = dc;
 }
 const isDropped = id => { derive(); return _dset.has(id); };
 const spellOf = id => { derive(); return _spell[id] || {}; };
 // the card's text with the spelling fixes B approved applied
 function textOf(c, f) { let t = c[f] ?? ''; const m = spellOf(c.id); for (const s of c.spell || []) if (m[s.bad] === 'ok') t = t.split(s.bad).join(s.good); return t; }
-const visible = c => !isDropped(c.id) && c.check !== 'fail' && !(settings.hideDups && deckOf(c) === 'claude' && c.dup?.some(d => d.sim >= .6));
+const byId = id => deck.cards.find(x => x.id === id);
+function dupHidden(c) {
+  derive();
+  if (deckOf(c) === 'claude') { for (const d of c.dup || []) { const v = _dupc[c.id + '|' + d.id]; if (v === 'mine') return true; if (!v && settings.hideDups && d.sim >= .6) return true; } return false; }
+  for (const d of c.dupBy || []) if (_dupc[d.id + '|' + c.id] === 'claude') return true;
+  return false;
+}
+const visible = c => !isDropped(c.id) && c.check !== 'fail' && !dupHidden(c);
 const pool = () => deck.cards.filter(c => visible(c) && !(settings.hideDrafts && c.review === 'draft') && (settings.deck === 'all' || deckOf(c) === settings.deck));
 
 function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; }
@@ -140,10 +147,17 @@ function srcBlock(c) {
   const none = !shown.length ? `<div class="ref muted">${esc(c.nolib || 'No source page is attached to this card.')}</div>` : '';
   return `<div class="src">${shown.map(row).join('')}${none}${c.note ? `<div class="rn" style="margin-top:8px">${esc(c.note)}</div>` : ''}</div>`;
 }
+const ansText = c => c.type === 'cloze' ? c.q.replace(/\{\{c\d+::(.*?)\}\}/g, '[$1]') : c.type === 'mc' ? c.choices[c.correct] : (c.a || '');
+function pairHtml(p) {
+  const { cl, me } = p, v = (derive(), _dupc[cl.id + '|' + me.id]), b = `data-cl="${esc(cl.id)}" data-me="${esc(me.id)}"`;
+  const card = (c, who) => `<div class="dcard"><b>${who}</b><div>${esc(c.type === 'cloze' ? c.q.replace(/\{\{c\d+::(.*?)\}\}/g, '[$1]') : c.q)}</div>${c.type === 'cloze' ? '' : `<div class="rn">${rich(ansText(c)) || ''}</div>`}${c.src && !c.nosrc ? `<div class="rn">${esc(c.cite || '')} <button class="small" data-open="${esc(c.src)}:${c.page}">page ${c.page}</button></div>` : ''}</div>`;
+  const state = v === 'mine' ? 'You kept yours; Claude’s is hidden.' : v === 'claude' ? 'You kept Claude’s; yours is hidden.' : v === 'both' ? 'You kept both.' : (settings.hideDups && p.sim >= .6 ? 'Not chosen yet: Claude’s is hidden by default.' : 'Not chosen yet: both are showing.');
+  return `<div class="pair" ${b}>${card(me, 'Your card')}${card(cl, 'Claude’s card')}<div class="rn">${esc(state)}</div><div class="row2"><button class="small${v === 'mine' ? ' on' : ''}" data-dup="mine" ${b}>Keep mine</button><button class="small${v === 'claude' ? ' on' : ''}" data-dup="claude" ${b}>Keep Claude’s</button><button class="small${v === 'both' ? ' on' : ''}" data-dup="both" ${b}>Keep both</button></div></div>`;
+}
+const pairsOf = c => deckOf(c) === 'claude' ? (c.dup || []).map(d => ({ cl: c, me: byId(d.id), sim: d.sim })).filter(p => p.me) : (c.dupBy || []).map(d => ({ cl: byId(d.id), me: c, sim: d.sim })).filter(p => p.cl);
 function dupNote(c) {
-  if (deckOf(c) === 'mine' && c.dupBy?.length) return `<div class="alert">Claude has a similar card${c.dupBy.some(d => d.sim >= .6) && settings.hideDups ? ' (hidden so you do not see it twice)' : ''}: “${esc(c.dupBy[0].q)}”</div>`;
-  if (deckOf(c) === 'claude' && c.dup?.length) return `<div class="alert">Similar to your card: “${esc(c.dup[0].q)}”</div>`;
-  return '';
+  const ps = pairsOf(c); if (!ps.length) return '';
+  return `<div class="alert" id="dupbox"><b>A similar card exists in the other deck.</b> Choose which one you want:${ps.map(pairHtml).join('')}</div>`;
 }
 function spellHtml(c) {
   const m = spellOf(c.id);
@@ -418,6 +432,7 @@ function viewSettings() {
     <label><input type="checkbox" id="hd" ${settings.hideDrafts ? 'checked' : ''}> Hide DRAFT cards</label>
     <label><input type="checkbox" id="hdup" ${settings.hideDups ? 'checked' : ''}> Hide Claude's cards that duplicate one of mine</label>
     <label for="rdk">Manual page viewer</label><select id="rdk"><option value="auto">Dark when the device is dark</option><option value="on">Always dark</option><option value="off">Always light</option></select></div>
+    <div class="card"><b>Duplicates</b><p class="note" id="dupn"></p><div class="row"><button id="dupgo">Review similar cards</button></div></div>
     <div class="card"><b>Your edits</b><p class="note" id="edits"></p></div>
     <div class="card"><b>Progress</b><p class="note">${events.length} events · device ${esc(settings.device)}. Export from one device, import on another. Merging is safe to repeat.</p>
     <div class="row"><button id="ex" class="pri">Export / share</button></div>
@@ -437,6 +452,11 @@ function viewSettings() {
   $('#rdk').value = settings.refDark; $('#rdk').onchange = e => { settings.refDark = e.target.value; kvSet('settings', settings); };
   $('#ex').onclick = exportProgress;
   (() => {
+    const all = allPairs(), chosen = all.filter(p => (derive(), _dupc[p.cl.id + '|' + p.me.id])).length;
+    $('#dupn').textContent = `${all.length} of Claude's cards are similar to one of yours; you have chosen on ${chosen}. Cards you haven't chosen on follow the "hide duplicates" setting above.`;
+    $('#dupgo').onclick = viewDups;
+  })();
+  (() => {
     derive(); const dropped = deck.cards.filter(c => _dset.has(c.id)), fixes = [];
     for (const c of deck.cards) { const m = spellOf(c.id); for (const s of c.spell || []) if (m[s.bad] === 'ok') fixes.push(`${s.bad} → ${s.good}   (${c.q.slice(0, 50)})`); }
     $('#edits').innerHTML = `<b>${fixes.length}</b> spelling fixes approved${fixes.length ? ` <button class="small" id="cpf">Copy list for my sheets</button><textarea id="fxl" rows="4" readonly style="margin-top:8px">${esc(fixes.join('\\n'))}</textarea>` : ''}<br><b>${dropped.length}</b> cards discarded${dropped.length ? `<div style="margin-top:8px">${dropped.slice(0, 100).map(c => `<div class="fix">${esc(c.q.replace(/\\{\\{c\\d+::(.*?)\\}\\}/g, '$1').slice(0, 80))} <button class="mini" data-restore="${esc(c.id)}">restore</button></div>`).join('')}</div>` : ''}`;
@@ -453,6 +473,12 @@ function viewSettings() {
     } catch (err) { $('#msg').textContent = 'Not a progress file: ' + err.message; }
   };
   navigator.storage?.persisted?.().then(p => { const el = $('#per'); if (el) el.textContent = p ? 'Storage: persistent.' : 'Storage: not marked persistent. Export now and then.'; });
+}
+function allPairs() { const out = []; for (const c of deck.cards) if (deckOf(c) === 'claude') for (const d of c.dup || []) { const me = byId(d.id); if (me) out.push({ cl: c, me, sim: d.sim }); } return out.sort((x, y) => y.sim - x.sim); }
+function viewDups() {
+  derive(); const all = allPairs(), todo = all.filter(p => !_dupc[p.cl.id + '|' + p.me.id]), done = all.filter(p => _dupc[p.cl.id + '|' + p.me.id]);
+  $('#main').innerHTML = `<div class="card"><button class="small" id="dback">‹ Settings</button> <b>Similar cards</b><p class="note">${todo.length} to choose, ${done.length} chosen. Most alike first. A card you do not keep is hidden, not deleted.</p></div>${todo.concat(done).slice(0, 120).map(pairHtml).join('')}`;
+  $('#dback').onclick = () => show('settings');
 }
 async function exportProgress() {
   const name = `progress-${settings.device}-${new Date().toISOString().slice(0, 10)}.json`;
@@ -522,6 +548,13 @@ document.addEventListener('click', e => {
   const box = $('#spellbox'); if (box) box.innerHTML = spellHtml(c);
   const q = document.querySelector('[data-f="q"]'), an = document.querySelector('[data-f="a"]');
   if (q) q.textContent = textOf(c, 'q'); if (an) an.innerHTML = ans(textOf(c, 'a'));
+});
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-dup]'); if (!b) return;
+  events.push({ id: uid(), k: 'dup', c: b.dataset.cl, m: b.dataset.me, t: Date.now(), v: b.dataset.dup }); save();
+  const pair = b.closest('.pair'); if (!pair) return;
+  const cl = byId(b.dataset.cl), me = byId(b.dataset.me); pair.outerHTML = pairHtml({ cl, me, sim: (cl.dup || []).find(d => d.id === me.id)?.sim || 0 });
+  if (tab === 'settings') return;
 });
 let rsz; window.addEventListener('resize', () => { clearTimeout(rsz); rsz = setTimeout(renderRef, 250); });
 
