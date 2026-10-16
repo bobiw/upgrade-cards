@@ -49,17 +49,17 @@ function step(s, e, cap) {
 }
 function replay() {
   const st = {}, cap = maxIvl();
-  for (const e of events.slice().sort(byTime)) if (!e.k) st[e.c] = step(st[e.c], e, cap);
+  derive(); for (const e of events.slice().sort(byTime)) if (!e.k && !_undone.has(e.id)) st[e.c] = step(st[e.c], e, cap);
   return st;
 }
 const endOfToday = () => { const d = new Date(); d.setHours(23, 59, 59, 999); return d.getTime(); };
 const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString();
 const deckOf = c => c.deck || (c.id.startsWith('raw-') ? 'mine' : 'claude');
 const DECKS = [['mine', 'My cards'], ['claude', "Claude's cards"], ['all', 'All']];
-let _dk = -1, _dset = new Set(), _spell = {};
+let _dk = -1, _dset = new Set(), _spell = {}, _undone = new Set();
 function derive() {
   if (_dk === events.length) return; _dk = events.length;
-  const d = {}, sp = {};
+  const d = {}, sp = {}; _undone = new Set(events.filter(e => e.k === 'undo').map(e => e.ref));
   for (const e of events.slice().sort(byTime)) { if (e.k === 'drop') d[e.c] = e.v; else if (e.k === 'spell') (sp[e.c] ||= {})[e.bad] = e.v; }
   _dset = new Set(Object.keys(d).filter(k => d[k])); _spell = sp;
 }
@@ -231,19 +231,30 @@ function viewStudy() {
   body(c);
 }
 function done(c, g) {
-  events.push({ id: uid(), c: c.id, t: Date.now(), g, ms: Date.now() - S.t0, d: settings.device });
-  save(); S.done++;
-  const rnd = (lo, hi) => lo + (Math.random() * (hi - lo + 1) | 0), put = k => S.queue.splice(Math.min(S.queue.length, S.i + 1 + k), 0, c);
-  S.rl ||= {};
+  const ev = { id: uid(), c: c.id, t: Date.now(), g, ms: Date.now() - S.t0, d: settings.device };
+  events.push(ev); save(); S.done++;
+  const rnd = (lo, hi) => lo + (Math.random() * (hi - lo + 1) | 0);
+  S.rl ||= {}; S.hist ||= [];
+  const h = { id: ev.id, c, i: S.i, prevRl: S.rl[c.id], pos: null };
+  const put = k => { h.pos = Math.min(S.queue.length, S.i + 1 + k); S.queue.splice(h.pos, 0, c); };
   if (g === 1) { S.rl[c.id] = 2; put(rnd(7, 11)); }                                   // missed: back after ~7-11 cards, again after that
   else if (S.rl[c.id] > 0) { S.rl[c.id]--; if (S.rl[c.id] > 0) put(rnd(14, 20)); else delete S.rl[c.id]; }
-  S.i++; viewStudy();
+  S.hist.push(h); S.i++; viewStudy();
+}
+// go back one card: the answer is undone (kept in the log as an 'undo' so it merges across devices) and the card is shown again
+function undoLast() {
+  if (!S?.hist?.length) return;
+  const h = S.hist.pop();
+  events.push({ id: uid(), k: 'undo', c: h.c.id, t: Date.now(), ref: h.id }); save();
+  if (h.pos != null && h.pos > h.i && S.queue[h.pos]?.id === h.c.id) S.queue.splice(h.pos, 1);
+  if (h.prevRl === undefined) delete S.rl[h.c.id]; else S.rl[h.c.id] = h.prevRl;
+  S.done = Math.max(0, S.done - 1); S.i = h.i; viewStudy();
 }
 function reveal(c, html) {
   $('#cc').insertAdjacentHTML('beforeend', html + mineBlock(c) + '<div id="figs"></div>' + srcBlock(c)); showFigs(c);
 }
 function flagBtn(c) {
-  return `<div class="row2"><button class="small" id="flag">⚑ Flag this card</button><button class="small" id="drop">🗑 Not needed</button></div>`;
+  return `<div class="row2"><button class="small" id="flag">⚑ Flag this card</button><button class="small" id="drop">🗑 Not needed</button><button class="small" id="back"${S?.hist?.length ? '' : ' disabled'}>↶ Undo</button></div>`;
 }
 function toast(msg, undo) {
   let t = $('#toast'); if (!t) { t = document.createElement('div'); t.id = 'toast'; document.body.appendChild(t); }
@@ -255,6 +266,7 @@ function dropCard(c, v) {
   events.push({ id: uid(), k: 'drop', c: c.id, t: Date.now(), v }); save();
 }
 function wireFlag(c) {
+  const bk = $('#back'); if (bk) bk.onclick = undoLast;
   const dp = $('#drop');
   if (dp) dp.onclick = () => {
     dropCard(c, 1);
@@ -365,7 +377,7 @@ function rSteps(c) {
 
 // ---------- progress ----------
 function viewStats() {
-  const st = replay(), P = pool(), now = Date.now(), rev = events.filter(e => !e.k);
+  const st = replay(), P = pool(), now = Date.now(), rev = (derive(), events.filter(e => !e.k && !_undone.has(e.id)));
   const seen = P.filter(c => st[c.id]).length, dueN = P.filter(c => st[c.id] && st[c.id].due <= endOfToday()).length;
   const days = new Set(rev.map(e => new Date(e.t).toDateString()));
   let streak = 0; for (let d = new Date(); days.has(d.toDateString()); d.setDate(d.getDate() - 1)) streak++;

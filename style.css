@@ -128,3 +128,5 @@ s{color:var(--bad)}
 .okx{color:var(--ok);font-weight:700}
 #toast{position:fixed;left:50%;bottom:calc(16px + env(safe-area-inset-bottom));transform:translate(-50%,40px);opacity:0;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:12px;padding:10px 14px;box-shadow:0 6px 24px rgba(0,0,0,.4);z-index:9;transition:all .2s;pointer-events:none;max-width:92vw}
 #toast.on{opacity:1;transform:translate(-50%,0);pointer-events:auto}
+
+.row2 button:disabled{opacity:.4}
