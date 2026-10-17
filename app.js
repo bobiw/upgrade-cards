@@ -256,6 +256,19 @@ async function showFigs(c) {
 const gradeBtns = sug => [[1, 'Again'], [2, 'Hard'], [3, 'Good'], [4, 'Easy']]
   .map(([g, l]) => `<button class="g${g}${sug === g ? ' sug' : ''}" data-g="${g}">${l}</button>`).join('');
 
+// ---------- review quizzes: the company review tests, in question order, scored ----------
+// every topic of area 'key' is a quiz; the four company reviews first, then the rest by name
+const QUIZ_ORDER = ['FOM Ch 4 review', 'FOM Ch 5 review', 'FOM Ch 10 review', 'Upgrade Weather review'];
+const quizLabel = t => t.replace(/ review$/, '').replace(/^Upgrade /, '');
+const quizTopics = () => [...new Set(deck.cards.filter(c => c.area === 'key').map(c => c.topic))].sort((a, b) => ((QUIZ_ORDER.indexOf(a) + 1 || 99) - (QUIZ_ORDER.indexOf(b) + 1 || 99)) || a.localeCompare(b, undefined, { numeric: true }));
+const noScore = c => c.noscore || /^(Not answerable|I don't know)/.test(c.a || '');
+const quizCards = t => deck.cards.filter(c => c.topic === t && !isDropped(c.id)).sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+function quizBox() {
+  const q = quizTopics().map(t => [t, quizLabel(t), quizCards(t).length]).filter(x => x[2]);
+  if (!q.length) return '';
+  return `<div class="card" style="margin-top:12px"><div class="q" style="font-size:1.05em">Review quizzes</div><p class="muted">The company tests, in order, with a score at the end.</p><div class="qz">${q.map(([t, l, n]) => { const r = settings.quiz?.[t]; return `<button data-quiz="${esc(t)}"><b>${esc(l)}</b><small>${n} questions${r ? ` · last ${r.ok}/${r.n}` : ''}</small></button>`; }).join('')}</div></div>`;
+}
+
 // ---------- study ----------
 function viewStudy() {
   if (!deck.cards.length) return $('#main').innerHTML = `<div class="card"><div class="q">No deck loaded</div><p class="muted">Settings → Load deck file, and pick <b>deck.json</b>.</p></div>`;
@@ -263,16 +276,21 @@ function viewStudy() {
     const b = buildQueue(false), weak = weakQueue().length;
     $('#main').innerHTML = `<div class="grid"><div class="card"><div class="big">${b.dueN}</div><small>due</small></div><div class="card"><div class="big">${b.newN}</div><small>new today</small></div><div class="card"><div class="big">${weak}</div><small>weak</small></div></div>
       ${b.queue.length ? `<button class="pri" style="width:100%" id="go">Start ${b.queue.length} cards</button>` : `<div class="card"><div class="q">Nothing due.</div><p class="muted">${b.unseenN} unseen cards are held back by the daily limit.</p></div>`}
-      <div class="row" style="margin-top:10px">${b.unseenN ? `<button id="more">Study unseen (${b.unseenN})</button>` : ''}${weak ? `<button id="wk">Drill weak (${weak})</button>` : ''}${reviewQueue().length ? `<button id="rv">My cards to check (${reviewQueue().length})</button>` : ''}</div>`;
+      <div class="row" style="margin-top:10px">${b.unseenN ? `<button id="more">Study unseen (${b.unseenN})</button>` : ''}${weak ? `<button id="wk">Drill weak (${weak})</button>` : ''}${reviewQueue().length ? `<button id="rv">My cards to check (${reviewQueue().length})</button>` : ''}</div>${quizBox()}`;
     const go = q => { S = { queue: q.slice(), i: 0, shown: false, t0: Date.now(), total: q.length, done: 0, rl: {} }; viewStudy(); };
     if ($('#go')) $('#go').onclick = () => go(b.queue);
     if ($('#more')) $('#more').onclick = () => go(buildQueue(true).queue);
     if ($('#wk')) $('#wk').onclick = () => go(mix(weakQueue(), b.st));
     if ($('#rv')) $('#rv').onclick = () => go(mix(reviewQueue(), b.st));
+    document.querySelectorAll('[data-quiz]').forEach(x => x.onclick = () => { go(quizCards(x.dataset.quiz)); Object.assign(S, { quiz: x.dataset.quiz, qn: 0, qok: 0, miss: [] }); });
     return;
   }
   if (S.i >= S.queue.length) {
     studyMode(false); syncNow(true);
+    if (S.quiz) {
+      (settings.quiz ||= {})[S.quiz] = { ok: S.qok, n: S.qn, t: Date.now() }; kvSet('settings', settings);
+      $('#main').innerHTML = `<div class="card"><div class="q">${esc(S.quiz)}: ${S.qok} / ${S.qn}${S.qn ? ` (${Math.round(S.qok / S.qn * 100)}%)` : ''}</div><p class="muted">Questions your library can't answer (they need a chart or a manual you don't have) were shown, not scored.</p>${S.miss.length ? `<p><b>Missed</b></p>${S.miss.map(c => `<p class="muted">${esc(c.q.split('\n')[0].slice(0, 140))}<br><b>${esc(c.a || '')}</b> · ${esc(c.cite || '')}</p>`).join('')}` : ''}<button class="pri" id="fin">Back</button></div>`;
+    } else
     $('#main').innerHTML = `<div class="card"><div class="q">Session done</div><p class="muted">${S.done} answers.</p><button class="pri" id="fin">Back</button></div>`;
     $('#fin').onclick = () => { S = null; viewStudy(); }; return;
   }
@@ -289,6 +307,7 @@ function done(c, g) {
   S.rl ||= {}; S.hist ||= [];
   const h = { id: ev.id, c, i: S.i, prevRl: S.rl[c.id], pos: null };
   const put = k => { h.pos = Math.min(S.queue.length, S.i + 1 + k); S.queue.splice(h.pos, 0, c); };
+  if (S.quiz) { h.quiz = !noScore(c); if (h.quiz) { S.qn++; if (g > 1) S.qok++; else S.miss.push(c); h.qok = g > 1; } S.hist.push(h); S.i++; return viewStudy(); }
   if (g === 1) { S.rl[c.id] = 2; put(rnd(7, 11)); }                                   // missed: back after ~7-11 cards, again after that
   else if (S.rl[c.id] > 0) { S.rl[c.id]--; if (S.rl[c.id] > 0) put(rnd(14, 20)); else delete S.rl[c.id]; }
   S.hist.push(h); S.i++; viewStudy();
@@ -300,6 +319,7 @@ function undoLast() {
   events.push({ id: uid(), k: 'undo', c: h.c.id, t: Date.now(), ref: h.id }); save();
   if (h.pos != null && h.pos > h.i && S.queue[h.pos]?.id === h.c.id) S.queue.splice(h.pos, 1);
   if (h.prevRl === undefined) delete S.rl[h.c.id]; else S.rl[h.c.id] = h.prevRl;
+  if (h.quiz) { S.qn--; if (h.qok) S.qok--; else S.miss.pop(); }
   S.done = Math.max(0, S.done - 1); S.i = h.i; viewStudy();
 }
 function reveal(c, html) {
@@ -333,7 +353,9 @@ function gradePanel(c, sug) {
   $('#ctl').querySelectorAll('[data-g]').forEach(b => b.onclick = () => done(c, +b.dataset.g));
   wireFlag(c);
 }
-function rFlip(c) { rSwipe(c, `<div class="q" data-f="q">${esc(textOf(c, 'q'))}</div>`, `<div data-f="a">${ans(textOf(c, 'a'))}</div>`); }
+// a question with a blank line: the first part is the question, the rest (options, weather data) a smaller left-aligned block
+const qHtml = s => { const i = String(s ?? '').indexOf('\n\n'); return i < 0 ? esc(s) : esc(s.slice(0, i)) + `<span class="qx">${esc(s.slice(i + 2))}</span>`; };
+function rFlip(c) { rSwipe(c, `<div class="q" data-f="q">${qHtml(textOf(c, 'q'))}</div>`, `<div data-f="a">${ans(textOf(c, 'a'))}</div>`); }
 function rCloze(c) { rSwipe(c, `<div class="q">${cloze(c.q, false)}</div>`, `<div class="q">${cloze(c.q, true)}</div>`); }
 // flip card: tap to flip; drag right = got it, left = missed (buttons and arrow keys do the same)
 function rSwipe(c, front, back) {
@@ -381,7 +403,7 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'ArrowRight') S.cur.grade(3); else if (e.key === 'ArrowLeft') S.cur.grade(1);
 });
 function rMc(c) {
-  $('#cc').insertAdjacentHTML('beforeend', `<div class="q">${esc(c.q)}</div><div style="margin-top:12px">${c.choices.map((x, i) => `<button class="choice" data-i="${i}">${esc(x)}</button>`).join('')}</div>`);
+  $('#cc').insertAdjacentHTML('beforeend', `<div class="q">${qHtml(c.q)}</div><div style="margin-top:12px">${c.choices.map((x, i) => `<button class="choice" data-i="${i}">${esc(x)}</button>`).join('')}</div>`);
   $('#cc').querySelectorAll('.choice').forEach(b => b.onclick = () => {
     const i = +b.dataset.i, ok = i === c.correct;
     $('#cc').querySelectorAll('.choice').forEach((x, j) => { x.disabled = true; if (j === c.correct) x.classList.add('right'); });
@@ -405,7 +427,7 @@ function lcsDiff(exp, got) {
   return out;
 }
 function rTyped(c) {
-  $('#cc').insertAdjacentHTML('beforeend', `<div class="q">${esc(c.q)}</div><textarea id="ta" rows="6" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Type it from memory"></textarea>`);
+  $('#cc').insertAdjacentHTML('beforeend', `<div class="q">${qHtml(c.q)}</div><textarea id="ta" rows="6" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Type it from memory"></textarea>`);
   $('#ctl').innerHTML = `<button class="pri" style="width:100%" id="sh">Check</button>`;
   $('#sh').onclick = () => {
     const exp = normTxt(c.a), got = normTxt($('#ta').value), d = lcsDiff(exp, got);
@@ -417,7 +439,7 @@ function rTyped(c) {
 }
 function rSteps(c) {
   const order = shuffle(c.steps.map((s, i) => i));
-  $('#cc').insertAdjacentHTML('beforeend', `<div class="q">${esc(c.q)}</div><p class="muted">Tap the steps in order.</p><div id="sl">${order.map(i => `<button class="step" data-i="${i}">${esc(c.steps[i])}</button>`).join('')}</div>`);
+  $('#cc').insertAdjacentHTML('beforeend', `<div class="q">${qHtml(c.q)}</div><p class="muted">Tap the steps in order.</p><div id="sl">${order.map(i => `<button class="step" data-i="${i}">${esc(c.steps[i])}</button>`).join('')}</div>`);
   $('#sl').querySelectorAll('.step').forEach(b => b.onclick = () => {
     if (b.classList.contains('done')) return;
     if (+b.dataset.i === S.pos) {
@@ -639,7 +661,7 @@ const cardOf = id => byId(id) || curCard();
 function afterDecision(c, k) {                // a decision was made: let the box shrink, and show the new text if it changed
   openBoxes.delete(bkey(c, k)); refreshBox(c, k);
   const q = document.querySelector('[data-f="q"]'), an = document.querySelector('[data-f="a"]');
-  if (q) q.textContent = textOf(c, 'q'); if (an) an.innerHTML = ans(textOf(c, 'a'));
+  if (q) q.innerHTML = qHtml(textOf(c, 'q')); if (an) an.innerHTML = ans(textOf(c, 'a'));
 }
 document.addEventListener('click', e => {
   let b;

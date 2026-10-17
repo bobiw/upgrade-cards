@@ -184,3 +184,5 @@ main.study #ctl{flex:none}
 #pomomenu{display:none;max-width:720px;margin:0 auto;padding:6px 12px;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);background:var(--card)}
 #pomomenu span{margin-left:auto;font-size:13px}
 @media (min-width:760px){#pomomenu{max-width:900px;padding:6px 32px}}
+.qx{display:block;margin-top:12px;font:400 14px/1.45 ui-monospace,Menlo,monospace;text-align:left;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--fg)}
+.qz{display:grid;grid-template-columns:1fr 1fr;gap:8px}.qz button{text-align:left;padding:10px 12px;display:flex;flex-direction:column;gap:3px;min-height:56px}.qz b{font-weight:600;line-height:1.25}.qz small{color:var(--mut)}
