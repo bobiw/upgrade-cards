@@ -56,17 +56,19 @@ const endOfToday = () => { const d = new Date(); d.setHours(23, 59, 59, 999); re
 const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString();
 const deckOf = c => c.deck || (c.id.startsWith('raw-') ? 'mine' : 'claude');
 const DECKS = [['mine', 'My cards'], ['claude', "Claude's cards"], ['all', 'All']];
-let _dk = -1, _dset = new Set(), _spell = {}, _undone = new Set(), _dupc = {};
+let _dk = -1, _dset = new Set(), _spell = {}, _undone = new Set(), _dupc = {}, _sugg = {}, _ack = {};
 function derive() {
   if (_dk === events.length) return; _dk = events.length;
-  const d = {}, sp = {}, dc = {}; _undone = new Set(events.filter(e => e.k === 'undo').map(e => e.ref));
-  for (const e of events.slice().sort(byTime)) { if (e.k === 'drop') d[e.c] = e.v; else if (e.k === 'spell') (sp[e.c] ||= {})[e.bad] = e.v; else if (e.k === 'dup') dc[e.c + '|' + e.m] = e.v; }
-  _dset = new Set(Object.keys(d).filter(k => d[k])); _spell = sp; _dupc = dc;
+  const d = {}, sp = {}, dc = {}, sg = {}, ak = {}; _undone = new Set(events.filter(e => e.k === 'undo').map(e => e.ref));
+  for (const e of events.slice().sort(byTime)) { if (e.k === 'drop') d[e.c] = e.v; else if (e.k === 'spell') (sp[e.c] ||= {})[e.bad] = e.v; else if (e.k === 'dup') dc[e.c + '|' + e.m] = e.v; else if (e.k === 'sugg') sg[e.c] = e.v; else if (e.k === 'ack') ak[e.c] = e.v; }
+  _dset = new Set(Object.keys(d).filter(k => d[k])); _spell = sp; _dupc = dc; _sugg = sg; _ack = ak;
 }
 const isDropped = id => { derive(); return _dset.has(id); };
 const spellOf = id => { derive(); return _spell[id] || {}; };
 // the card's text with the spelling fixes B approved applied
-function textOf(c, f) { let t = c[f] ?? ''; const m = spellOf(c.id); for (const s of c.spell || []) if (m[s.bad] === 'ok') t = t.split(s.bad).join(s.good); return t; }
+const suggOf = id => (derive(), _sugg[id]);          // 'ok' (use the suggested answer) | 'no' | undefined
+const ackOf = id => (derive(), !!_ack[id]);
+function textOf(c, f) { if (f === 'a' && c.suggest?.a && suggOf(c.id) === 'ok') return c.suggest.a; let t = c[f] ?? ''; const m = spellOf(c.id); for (const s of c.spell || []) if (m[s.bad] === 'ok') t = t.split(s.bad).join(s.good); return t; }
 const byId = id => deck.cards.find(x => x.id === id);
 function dupHidden(c) {
   derive();
@@ -108,8 +110,10 @@ function deckBar() {
   $('#deckbar').innerHTML = DECKS.map(([k, l]) => `<button data-deck="${k}" class="${settings.deck === k ? 'on' : ''}">${l}<small> ${n(k)}</small></button>`).join('');
   $('#deckbar').querySelectorAll('button').forEach(b => b.onclick = () => { settings.deck = b.dataset.deck; kvSet('settings', settings); S = null; closeRef(); show(tab); });
 }
+function fitHeader() { document.documentElement.style.setProperty('--hh', document.querySelector('header').offsetHeight + 'px'); }
+function studyMode(on) { $('#main').classList.toggle('study', on); document.body.classList.toggle('studying', on); fitHeader(); }
 function show(t) {
-  tab = t; deckBar(); $('#deckbar').style.display = t === 'settings' ? 'none' : 'flex'; document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+  tab = t; studyMode(false); deckBar(); $('#deckbar').style.display = t === 'settings' ? 'none' : 'flex'; document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
   tabs[t]();
 }
 const cloze = (txt, reveal) => esc(txt).replace(/\{\{c\d+::(.*?)\}\}/g, (_, a) => `<span class="blank">${reveal ? a : '[&nbsp;&nbsp;&nbsp;…&nbsp;&nbsp;&nbsp;]'}</span>`);
@@ -147,17 +151,26 @@ function srcBlock(c) {
   const none = !shown.length ? `<div class="ref muted">${esc(c.nolib || 'No source page is attached to this card.')}</div>` : '';
   return `<div class="src">${shown.map(row).join('')}${none}${c.note ? `<div class="rn" style="margin-top:8px">${esc(c.note)}</div>` : ''}</div>`;
 }
-const ansText = c => c.type === 'cloze' ? c.q.replace(/\{\{c\d+::(.*?)\}\}/g, '[$1]') : c.type === 'mc' ? c.choices[c.correct] : (c.a || '');
+const clozeQ = c => c.q.replace(/\{\{c\d+::(.*?)\}\}/g, '[…]');
+const clozeA = c => [...c.q.matchAll(/\{\{c\d+::(.*?)\}\}/g)].map(m => m[1]).join('; ');
+const qOf = c => c.type === 'cloze' ? clozeQ(c) : c.q;
+const aOf = c => c.type === 'cloze' ? clozeA(c) : c.type === 'mc' ? c.choices[c.correct] : (c.a || '');
 function pairHtml(p) {
   const { cl, me } = p, v = (derive(), _dupc[cl.id + '|' + me.id]), b = `data-cl="${esc(cl.id)}" data-me="${esc(me.id)}"`;
-  const card = (c, who) => `<div class="dcard"><b>${who}</b><div>${esc(c.type === 'cloze' ? c.q.replace(/\{\{c\d+::(.*?)\}\}/g, '[$1]') : c.q)}</div>${c.type === 'cloze' ? '' : `<div class="rn">${rich(ansText(c)) || ''}</div>`}${c.src && !c.nosrc ? `<div class="rn">${esc(c.cite || '')} <button class="small" data-open="${esc(c.src)}:${c.page}">page ${c.page}</button></div>` : ''}</div>`;
+  const card = (c, who) => `<div class="dcard"><b>${who}</b><div class="dq">${esc(qOf(c))}</div><div class="rn"><b>Answer:</b> ${rich(aOf(c)) || '—'}</div>${c.src && !c.nosrc ? `<div class="rn">${esc(c.cite || '')} <button class="small" data-open="${esc(c.src)}:${c.page}">page ${c.page}</button></div>` : ''}</div>`;
   const state = v === 'mine' ? 'You kept yours; Claude’s is hidden.' : v === 'claude' ? 'You kept Claude’s; yours is hidden.' : v === 'both' ? 'You kept both.' : (settings.hideDups && p.sim >= .6 ? 'Not chosen yet: Claude’s is hidden by default.' : 'Not chosen yet: both are showing.');
   return `<div class="pair" ${b}>${card(me, 'Your card')}${card(cl, 'Claude’s card')}<div class="rn">${esc(state)}</div><div class="row2"><button class="small${v === 'mine' ? ' on' : ''}" data-dup="mine" ${b}>Keep mine</button><button class="small${v === 'claude' ? ' on' : ''}" data-dup="claude" ${b}>Keep Claude’s</button><button class="small${v === 'both' ? ' on' : ''}" data-dup="both" ${b}>Keep both</button></div></div>`;
 }
 const pairsOf = c => deckOf(c) === 'claude' ? (c.dup || []).map(d => ({ cl: c, me: byId(d.id), sim: d.sim })).filter(p => p.me) : (c.dupBy || []).map(d => ({ cl: byId(d.id), me: c, sim: d.sim })).filter(p => p.cl);
-function dupNote(c) {
+// a box B has dealt with shrinks to one line; tap it to open again
+const openBoxes = new Set(), bkey = (c, k) => c.id + ':' + k;
+const miniBox = (c, k, text, cls = '') => `<div class="alert min ${cls}" id="box-${k}" data-toggle="${esc(bkey(c, k))}" role="button">${text} <span class="muted">· tap to open</span></div>`;
+const hideBtn = (c, k) => `<button class="mini" data-toggle="${esc(bkey(c, k))}">hide</button>`;
+function dupBox(c) {
   const ps = pairsOf(c); if (!ps.length) return '';
-  return `<div class="alert" id="dupbox"><b>A similar card exists in the other deck.</b> Choose which one you want:${ps.map(pairHtml).join('')}</div>`;
+  derive(); const ch = ps.map(p => _dupc[p.cl.id + '|' + p.me.id]), decided = ch.every(Boolean), open = openBoxes.has(bkey(c, 'dup'));
+  if (decided && !open) { const v = ch[0]; return miniBox(c, 'dup', v === 'mine' ? '✓ Kept your card (Claude’s hidden)' : v === 'claude' ? '✓ Kept Claude’s card (yours hidden)' : '✓ Kept both cards'); }
+  return `<div class="alert" id="box-dup"><b>A similar card exists in the other deck.</b> Choose which one you want:${ps.map(pairHtml).join('')}${decided ? hideBtn(c, 'dup') : ''}</div>`;
 }
 function spellHtml(c) {
   const m = spellOf(c.id);
@@ -168,15 +181,35 @@ function spellHtml(c) {
       : `<s>${esc(s.bad)}</s> → <b>${esc(s.good)}</b> <button class="mini yes" data-spell="ok" ${b} aria-label="approve">✓</button><button class="mini no" data-spell="no" ${b} aria-label="discard">✗</button>`}</div>`;
   }).join('');
 }
+function spellBox(c) {
+  if (!c.spell?.length) return '';
+  const m = spellOf(c.id), vs = c.spell.map(s => m[s.bad]), decided = vs.every(Boolean), open = openBoxes.has(bkey(c, 'spell'));
+  if (decided && !open) { const ok = vs.filter(v => v === 'ok').length; return miniBox(c, 'spell', ok ? `✓ Spelling: ${ok} fixed${ok < vs.length ? ', ' + (vs.length - ok) + ' kept' : ''}` : 'Spelling: kept as you wrote it'); }
+  return `<div class="alert" id="box-spell">${spellHtml(c)}${decided ? hideBtn(c, 'spell') : ''}</div>`;
+}
+function suggBox(c) {
+  if (!c.suggest?.a) return '';
+  const v = suggOf(c.id), open = openBoxes.has(bkey(c, 'sugg'));
+  if (v && !open) return miniBox(c, 'sugg', v === 'ok' ? '✓ Using the suggested answer' : 'Kept your answer', 'okbox');
+  const s = c.suggest, b = `data-c="${esc(c.id)}"`;
+  return `<div class="sugg" id="box-sugg"><b>Suggested answer</b>${rich(s.a)}${s.why ? `<div class="rn">${esc(s.why)}</div>` : ''}${s.src ? `<div class="rh"><b>${esc(s.cite || '')}</b> <button class="small" data-open="${esc(s.src)}:${s.page}">Open page ${s.page}</button></div>${s.quotes?.length ? `<q>${esc(s.quotes.join(' … '))}</q>` : ''}` : ''}<div class="row2"><button class="small${v === 'ok' ? ' on' : ''}" data-sugg="ok" ${b}>✓ Use this answer</button><button class="small${v === 'no' ? ' on' : ''}" data-sugg="no" ${b}>✗ Keep mine</button>${v ? hideBtn(c, 'sugg') : ''}</div></div>`;
+}
+function issueBox(c) {
+  if (!(c.status === 'flagged' && c.issue)) return '';
+  const decided = ackOf(c.id) || !!suggOf(c.id), open = openBoxes.has(bkey(c, 'issue'));
+  if (decided && !open) return miniBox(c, 'issue', 'Noted: this card was flagged', 'badmin');
+  return `<div class="alert bad" id="box-issue"><b>Check this card.</b> ${esc(c.issue)}<div class="row2"><button class="small" data-ack="${esc(c.id)}">${decided ? 'Noted' : 'Got it'}</button>${decided ? hideBtn(c, 'issue') : ''}</div></div>`;
+}
+const BOXES = { dup: dupBox, spell: spellBox, sugg: suggBox, issue: issueBox };
+function refreshBox(c, k) { const el = document.getElementById('box-' + k); if (el) el.outerHTML = BOXES[k](c); }
+function dupNote(c) { return dupBox(c); }
 function mineBlock(c) {
-  if (deckOf(c) !== 'mine') return dupNote(c);
-  let h = '';
-  if (c.status === 'flagged' && c.issue) h += `<div class="alert bad"><b>Check this card.</b> ${esc(c.issue)}</div>`;
-  else if (c.status === 'unmatched') h += `<div class="alert">The manual page is ${esc(c.src)} p.${c.page}, but the exact wording couldn't be matched there. Worth a look.</div>`;
-  if (c.spell?.length) h += `<div class="alert" id="spellbox">${spellHtml(c)}</div>`;
-  if (c.suggest?.a) h += `<div class="sugg"><b>Suggested answer</b>${rich(c.suggest.a)}${c.suggest.why ? `<div class="rn">${esc(c.suggest.why)}</div>` : ''}${c.suggest.src ? `<div class="rh"><b>${esc(c.suggest.cite || '')}</b> <button class="small" data-open="${esc(c.suggest.src)}:${c.suggest.page}">Open page ${c.suggest.page}</button></div>${c.suggest.quotes?.length ? `<q>${esc(c.suggest.quotes.join(' … '))}</q>` : ''}` : ''}</div>`;
-  else if (c.nolib) h += `<div class="alert">${esc(c.nolib)}</div>`;
-  return h + dupNote(c);
+  if (deckOf(c) !== 'mine') return dupBox(c);
+  let h = issueBox(c);
+  if (c.status === 'unmatched') h += `<div class="alert">The manual page is ${esc(c.src)} p.${c.page}, but the exact wording couldn't be matched there. Worth a look.</div>`;
+  h += spellBox(c) + suggBox(c);
+  if (!c.suggest?.a && c.nolib) h += `<div class="alert">${esc(c.nolib)}</div>`;
+  return h + dupBox(c);
 }
 const reviewQueue = () => pool().filter(c => deckOf(c) === 'mine' && (c.status === 'flagged' || c.spell?.length || c.suggest?.a));
 
@@ -239,11 +272,11 @@ function viewStudy() {
     return;
   }
   if (S.i >= S.queue.length) {
-    syncNow(true);
+    studyMode(false); syncNow(true);
     $('#main').innerHTML = `<div class="card"><div class="q">Session done</div><p class="muted">${S.done} answers.</p><button class="pri" id="fin">Back</button></div>`;
     $('#fin').onclick = () => { S = null; viewStudy(); }; return;
   }
-  S.cur = null; const c = S.queue[S.i]; S.t0 = Date.now(); S.shown = false; S.errors = 0; S.pos = 0;
+  studyMode(true); S.cur = null; const c = S.queue[S.i]; S.t0 = Date.now(); S.shown = false; S.errors = 0; S.pos = 0;
   const prog = `<div class="prog"><i style="width:${S.i / S.queue.length * 100}%"></i></div>`;
   const body = { flip: rFlip, cloze: rCloze, mc: rMc, typed: rTyped, steps: rSteps }[c.type] || rFlip;
   $('#main').innerHTML = prog + `<div class="card" id="cc">${head(c)}</div><div id="ctl"></div>`;
@@ -306,33 +339,38 @@ function rCloze(c) { rSwipe(c, `<div class="q">${cloze(c.q, false)}</div>`, `<di
 function rSwipe(c, front, back) {
   const cc = $('#cc'); cc.className = 'plain';
   cc.innerHTML = `<div class="swipe"><div class="drag" id="dr"><div class="sc" id="sc">
-    <div class="face front">${head(c)}${front}<div class="hint">Tap to flip</div></div>
-    <div class="face back">${head(c)}${back}${mineBlock(c)}<div id="figs"></div>${srcBlock(c)}</div></div>
+    <div class="face front">${head(c)}<div class="fc">${front}</div><div class="hint">Tap to flip</div></div>
+    <div class="face back">${head(c)}<div class="bs" id="bs">${back}${mineBlock(c)}<div id="figs"></div>${srcBlock(c)}</div></div></div>
     <div class="tint ok" id="tok"></div><div class="tint no" id="tno"></div></div></div>`;
-  $('#ctl').innerHTML = `<div class="row"><button class="g1" id="bx">✗ Missed</button><button class="g3" id="bo">✓ Got it</button></div><p class="note kbd" style="text-align:center;margin:8px 0">Keyboard: Space flips · → got it · ← missed</p>${flagBtn(c)}`;
+  $('#ctl').innerHTML = `<div class="row"><button class="g1" id="bx">✗ Missed</button><button class="g3" id="bo">✓ Got it</button></div><p class="note kbd" style="text-align:center;margin:6px 0">Keyboard: Space flips · → got it · ← missed</p>${flagBtn(c)}`;
   wireFlag(c);
-  const dr = $('#dr'), sc = $('#sc'), tok = $('#tok'), tno = $('#tno');
-  let x0 = null, y0 = 0, off = 0, dx = 0, moved = false, busy = false, raf = 0, hist = [];
+  const dr = $('#dr'), sc = $('#sc'), tok = $('#tok'), tno = $('#tno'), bs = $('#bs');
+  let x0 = null, y0 = 0, off = 0, dx = 0, mode = null, busy = false, raf = 0, mom = 0, hist = [], sc0 = 0, flipped = false;
   const paint = () => { raf = 0; dr.style.transform = `translate3d(${dx}px,0,0) rotate(${dx / 28}deg)`; const t = Math.min(.55, Math.abs(dx) / 240); tok.style.opacity = dx > 0 ? t : 0; tno.style.opacity = dx < 0 ? t : 0; };
-  const reset = () => { x0 = null; moved = false; dr.style.transition = 'transform .18s ease-out'; dr.style.transform = ''; tok.style.opacity = 0; tno.style.opacity = 0; };
-  const grade = (g, fast) => { if (busy) return; busy = true; dr.style.transition = `transform ${fast ? .14 : .2}s ease-in, opacity ${fast ? .14 : .2}s`; dr.style.transform = `translate3d(${g === 3 ? 130 : -130}%,0,0) rotate(${g === 3 ? 16 : -16}deg)`; dr.style.opacity = 0; setTimeout(() => done(c, g), fast ? 120 : 170); };
-  let flipped = false;
+  const reset = () => { x0 = null; mode = null; dr.style.transition = 'transform .18s ease-out'; dr.style.transform = ''; tok.style.opacity = 0; tno.style.opacity = 0; };
+  const grade = (g, fast) => { if (busy) return; busy = true; cancelAnimationFrame(mom); dr.style.transition = `transform ${fast ? .14 : .2}s ease-in, opacity ${fast ? .14 : .2}s`; dr.style.transform = `translate3d(${g === 3 ? 130 : -130}%,0,0) rotate(${g === 3 ? 16 : -16}deg)`; dr.style.opacity = 0; setTimeout(() => done(c, g), fast ? 120 : 170); };
   const flip = () => { flipped = !flipped; sc.classList.toggle('flipped', flipped); if (flipped) showFigs(c); };
   S.cur = { flip, grade };
   $('#bx').onclick = () => grade(1); $('#bo').onclick = () => grade(3);
-  dr.onpointerdown = e => { if (busy || e.target.closest('button,[data-open]')) return; x0 = e.clientX; y0 = e.clientY; dx = 0; off = 0; moved = false; hist = [[e.timeStamp, e.clientX]]; dr.style.transition = 'none'; };
+  // The card owns every touch (touch-action: none), so a sideways swipe and a scroll of the answer can never fight:
+  // after 8 px we decide once. Sideways = swipe the card; up/down = scroll the answer by hand, with a little momentum.
+  const skip = t => t.closest('button,input,textarea,select,a');
+  const momentum = v => { cancelAnimationFrame(mom); let last = performance.now(); const step = t => { const dt = t - last; last = t; const before = bs.scrollTop; bs.scrollTop += v * dt; v *= Math.pow(.94, dt / 16); if (Math.abs(v) > .02 && bs.scrollTop !== before) mom = requestAnimationFrame(step); }; mom = requestAnimationFrame(step); };
+  dr.onpointerdown = e => { if (busy || skip(e.target)) return; cancelAnimationFrame(mom); x0 = e.clientX; y0 = e.clientY; dx = 0; off = 0; mode = null; sc0 = bs.scrollTop; hist = [[e.timeStamp, e.clientX, e.clientY]]; dr.style.transition = 'none'; };
   dr.onpointermove = e => {
     if (x0 === null) return;
     const rx = e.clientX - x0, ry = e.clientY - y0;
-    if (!moved) { if (Math.abs(rx) > 6 && Math.abs(rx) > Math.abs(ry) * 1.1) { moved = true; off = rx; try { dr.setPointerCapture(e.pointerId); } catch (_) {} } else return; }
-    dx = rx - off; hist.push([e.timeStamp, e.clientX]); if (hist.length > 6) hist.shift();
-    if (!raf) raf = requestAnimationFrame(paint);
+    if (!mode) { if (Math.hypot(rx, ry) < 8) return; mode = Math.abs(rx) > Math.abs(ry) * 1.1 ? 'h' : 'v'; if (mode === 'h') off = rx; try { dr.setPointerCapture(e.pointerId); } catch (_) {} }
+    hist.push([e.timeStamp, e.clientX, e.clientY]); if (hist.length > 6) hist.shift();
+    if (mode === 'h') { dx = rx - off; if (!raf) raf = requestAnimationFrame(paint); }
+    else if (flipped) bs.scrollTop = sc0 - ry;
   };
   dr.onpointerup = e => {
-    if (x0 === null) return;
-    if (!moved) { x0 = null; flip(); return; }
-    const a0 = hist[0], a1 = hist[hist.length - 1], v = a1[0] > a0[0] ? (a1[1] - a0[1]) / (a1[0] - a0[0]) : 0;   // px per ms
-    x0 = null;
+    if (x0 === null) return; const m = mode; x0 = null;
+    if (!m) { if (!e.target.closest('.fig')) flip(); return; }                       // a tap flips the card
+    const a0 = hist[0], a1 = hist[hist.length - 1], dt = a1[0] - a0[0] || 1;
+    if (m === 'v') { if (flipped) momentum(-(a1[2] - a0[2]) / dt); return; }
+    const v = (a1[1] - a0[1]) / dt;                                                  // px per ms
     if (Math.abs(dx) > 70 || (Math.abs(v) > .5 && Math.abs(dx) > 24)) grade((Math.abs(dx) > 70 ? dx : v) > 0 ? 3 : 1, true); else reset();
   };
   dr.onpointercancel = reset;
@@ -433,6 +471,9 @@ function viewSettings() {
     <label><input type="checkbox" id="hd" ${settings.hideDrafts ? 'checked' : ''}> Hide DRAFT cards</label>
     <label><input type="checkbox" id="hdup" ${settings.hideDups ? 'checked' : ''}> Hide Claude's cards that duplicate one of mine</label>
     <label for="rdk">Manual page viewer</label><select id="rdk"><option value="auto">Dark when the device is dark</option><option value="on">Always dark</option><option value="off">Always light</option></select></div>
+    <div class="card"><b>Pomodoro timer</b><p class="note" id="pmn"></p>
+    <div class="row" style="gap:10px"><div style="flex:1"><label for="pf1">Focus (min)</label><input type="number" id="pf1" min="1" max="120"></div><div style="flex:1"><label for="pf2">Short break</label><input type="number" id="pf2" min="1" max="60"></div><div style="flex:1"><label for="pf3">Long break</label><input type="number" id="pf3" min="1" max="90"></div><div style="flex:1"><label for="pf4">Long every</label><input type="number" id="pf4" min="2" max="12"></div></div>
+    <div class="row" style="margin-top:10px"><button id="pbeep">Test the sound</button><button id="preset">Reset timer</button></div></div>
     <div class="card"><b>Library (deck and manuals from GitHub)</b><p class="note" id="lbs"></p><div id="lbui"></div></div>
     <div class="card"><b>Sync between devices</b><p class="note" id="syn"></p><div id="synui"></div></div>
     <div class="card"><b>Duplicates</b><p class="note" id="dupn"></p><div class="row"><button id="dupgo">Review similar cards</button></div></div>
@@ -454,6 +495,12 @@ function viewSettings() {
   $('#hdup').onchange = e => { settings.hideDups = e.target.checked; kvSet('settings', settings); deckBar(); };
   $('#rdk').value = settings.refDark; $('#rdk').onchange = e => { settings.refDark = e.target.value; kvSet('settings', settings); };
   $('#ex').onclick = exportProgress;
+  (() => {
+    const c = PC(), p = PS(), t = p.day === new Date().toDateString() ? p.today : 0;
+    $('#pmn').textContent = `Tap the 🍅 in the top bar to start a focus round. When it ends a break starts by itself; every ${c.every}th break is the long one. ${t} 🍅 done today.`;
+    [['pf1', 'focus'], ['pf2', 'short'], ['pf3', 'long'], ['pf4', 'every']].forEach(([id, k]) => { $('#' + id).value = c[k]; $('#' + id).onchange = e => { const v = Math.max(1, Math.round(+e.target.value || c[k])); settings.pomoCfg = { ...PC(), [k]: v }; kvSet('settings', settings); e.target.value = v; }; });
+    $('#pbeep').onclick = () => beep(2); $('#preset').onclick = () => { Object.assign(PS(), { phase: 'idle', endAt: 0, paused: false, remain: 0 }); pSave(); pPaint(); };
+  })();
   (() => {
     const lb = settings.lib, ui = $('#lbui'), st = $('#lbs');
     if (lb?.repo && lb?.token) {
@@ -587,20 +634,33 @@ document.addEventListener('click', e => {
   if (ref && b.closest('#ref')) { ref.src = s; ref.page = +p; ref.zoom = 1; renderRef(); } else openRef(s, p);
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && ref) closeRef(); if (ref && (e.key === '[' || e.key === ']')) { ref.page += e.key === ']' ? 1 : -1; renderRef(); } });
-document.addEventListener('click', e => {
-  const b = e.target.closest('[data-spell]'); if (!b) return;
-  const c = deck.cards.find(x => x.id === b.dataset.c), s = c?.spell?.[+b.dataset.i]; if (!s) return;
-  events.push({ id: uid(), k: 'spell', c: c.id, t: Date.now(), bad: s.bad, v: b.dataset.spell === 'undo' ? null : b.dataset.spell }); save();
-  const box = $('#spellbox'); if (box) box.innerHTML = spellHtml(c);
+const curCard = () => S && S.queue[S.i];
+const cardOf = id => byId(id) || curCard();
+function afterDecision(c, k) {                // a decision was made: let the box shrink, and show the new text if it changed
+  openBoxes.delete(bkey(c, k)); refreshBox(c, k);
   const q = document.querySelector('[data-f="q"]'), an = document.querySelector('[data-f="a"]');
   if (q) q.textContent = textOf(c, 'q'); if (an) an.innerHTML = ans(textOf(c, 'a'));
-});
+}
 document.addEventListener('click', e => {
-  const b = e.target.closest('[data-dup]'); if (!b) return;
-  events.push({ id: uid(), k: 'dup', c: b.dataset.cl, m: b.dataset.me, t: Date.now(), v: b.dataset.dup }); save();
-  const pair = b.closest('.pair'); if (!pair) return;
-  const cl = byId(b.dataset.cl), me = byId(b.dataset.me); pair.outerHTML = pairHtml({ cl, me, sim: (cl.dup || []).find(d => d.id === me.id)?.sim || 0 });
-  if (tab === 'settings') return;
+  let b;
+  if ((b = e.target.closest('[data-spell]'))) {
+    const c = byId(b.dataset.c), s = c?.spell?.[+b.dataset.i]; if (!s) return;
+    events.push({ id: uid(), k: 'spell', c: c.id, t: Date.now(), bad: s.bad, v: b.dataset.spell === 'undo' ? null : b.dataset.spell }); save(); afterDecision(c, 'spell');
+  } else if ((b = e.target.closest('[data-sugg]'))) {
+    const c = byId(b.dataset.c); if (!c) return;
+    events.push({ id: uid(), k: 'sugg', c: c.id, t: Date.now(), v: b.dataset.sugg }); save(); afterDecision(c, 'sugg'); openBoxes.delete(bkey(c, 'issue')); refreshBox(c, 'issue');
+  } else if ((b = e.target.closest('[data-ack]'))) {
+    const c = byId(b.dataset.ack); if (!c) return;
+    events.push({ id: uid(), k: 'ack', c: c.id, t: Date.now(), v: 1 }); save(); afterDecision(c, 'issue');
+  } else if ((b = e.target.closest('[data-dup]'))) {
+    events.push({ id: uid(), k: 'dup', c: b.dataset.cl, m: b.dataset.me, t: Date.now(), v: b.dataset.dup }); save();
+    const inBox = b.closest('#box-dup'), cur = curCard();
+    if (inBox && cur) { openBoxes.delete(bkey(cur, 'dup')); refreshBox(cur, 'dup'); }
+    else { const pair = b.closest('.pair'); if (pair) { const cl = byId(b.dataset.cl), me = byId(b.dataset.me); pair.outerHTML = pairHtml({ cl, me, sim: (cl.dup || []).find(d => d.id === me.id)?.sim || 0 }); } }
+  } else if ((b = e.target.closest('[data-toggle]'))) {
+    const key = b.dataset.toggle, [id, k] = key.split(':'), c = byId(id); if (!c) return;
+    if (openBoxes.has(key)) openBoxes.delete(key); else openBoxes.add(key); refreshBox(c, k);
+  }
 });
 let rsz; window.addEventListener('resize', () => { clearTimeout(rsz); rsz = setTimeout(renderRef, 250); });
 
@@ -701,6 +761,47 @@ function libPrompt() {
   };
 }
 
+// ---------- pomodoro timer: a chip in the header (tap to start; tap again for pause / skip / reset) ----------
+const PC = () => Object.assign({ focus: 25, short: 5, long: 15, every: 4 }, settings.pomoCfg || {});
+const PS = () => (settings.pomo ||= { phase: 'idle', endAt: 0, remain: 0, paused: false, n: 0, day: '', today: 0 });
+let audioCtx;
+function beep(times) {
+  try { audioCtx ||= new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume?.(); const t0 = audioCtx.currentTime;
+    for (let i = 0; i < times; i++) { const o = audioCtx.createOscillator(), g = audioCtx.createGain(), s = t0 + i * .35; o.frequency.value = 880; o.connect(g); g.connect(audioCtx.destination); g.gain.setValueAtTime(.0001, s); g.gain.exponentialRampToValueAtTime(.3, s + .02); g.gain.exponentialRampToValueAtTime(.0001, s + .25); o.start(s); o.stop(s + .3); } } catch (_) {}
+}
+const pLeft = () => { const p = PS(); return p.paused ? p.remain : Math.max(0, p.endAt - Date.now()); };
+const pFmt = ms => { const s = Math.ceil(ms / 1000); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
+const pSave = () => kvSet('settings', settings);
+function pStart(phase, from) { const p = PS(), m = phase === 'focus' ? PC().focus : phase === 'long' ? PC().long : PC().short; Object.assign(p, { phase, endAt: (from || Date.now()) + m * 60e3, paused: false, remain: 0 }); }
+function pNext(counted) {                                   // the current phase ended (or was skipped): focus -> break, break -> idle
+  const p = PS(), at = counted ? p.endAt : Date.now();
+  if (p.phase === 'focus') { if (counted) { const day = new Date().toDateString(); if (p.day !== day) { p.day = day; p.today = 0; } p.n++; p.today++; } pStart(counted && p.n % PC().every === 0 ? 'long' : 'short', at); }
+  else Object.assign(p, { phase: 'idle', endAt: 0, paused: false, remain: 0 });
+}
+function pPaint() {
+  const b = $('#pomo'); if (!b) return; const p = PS();
+  b.textContent = p.phase === 'idle' ? '🍅' : (p.paused ? '⏸ ' : p.phase === 'focus' ? '🍅 ' : '☕ ') + pFmt(pLeft()); b.classList.toggle('run', p.phase !== 'idle'); b.classList.toggle('brk', p.phase === 'short' || p.phase === 'long');
+}
+function pTick() {
+  const p = PS(); let ended = null;
+  while (p.phase !== 'idle' && !p.paused && Date.now() >= p.endAt) { ended = p.phase; pNext(true); }
+  if (ended) { pSave(); beep(ended === 'focus' ? 3 : 2); toast(p.phase === 'idle' ? '☕ Break over. Tap 🍅 when you want the next focus round.' : `🍅 Focus round done. ${p.phase === 'long' ? 'Long' : 'Short'} break: ${pFmt(pLeft())}`); }
+  pPaint();
+}
+function pMenu() {
+  const m = $('#pomomenu'); if (m.style.display === 'flex') { m.style.display = 'none'; return; }
+  const p = PS(), t = p.day === new Date().toDateString() ? p.today : 0;
+  m.innerHTML = `<button class="small" id="pm1">${p.paused ? 'Resume' : 'Pause'}</button><button class="small" id="pm2">${p.phase === 'focus' ? 'Skip to break' : 'End break'}</button><button class="small" id="pm3">Reset</button><span class="muted">${t} 🍅 today</span>`; m.style.display = 'flex'; fitHeader();
+  const close = () => { m.style.display = 'none'; fitHeader(); pPaint(); };
+  $('#pm1').onclick = () => { if (p.paused) { p.endAt = Date.now() + p.remain; p.paused = false; } else { p.remain = Math.max(0, p.endAt - Date.now()); p.paused = true; } pSave(); close(); };
+  $('#pm2').onclick = () => { pNext(false); pSave(); close(); };
+  $('#pm3').onclick = () => { Object.assign(p, { phase: 'idle', endAt: 0, paused: false, remain: 0 }); pSave(); close(); };
+}
+function pomoInit() {
+  $('#pomo').onclick = () => { beep(0); const p = PS(); if (p.phase === 'idle') { pStart('focus'); pSave(); pPaint(); } else pMenu(); };
+  setInterval(pTick, 1000); document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') pTick(); }); pTick();
+}
+
 // ---------- boot ----------
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.dataset.tab));
 (async () => {
@@ -711,7 +812,7 @@ document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.
   if (!settings.device) { settings.device = 'd' + uid().slice(0, 5); await kvSet('settings', settings); }
   navigator.storage?.persist?.();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-  show('study'); syncBar();
+  show('study'); syncBar(); pomoInit(); new ResizeObserver(fitHeader).observe(document.querySelector('header'));
   syncNow(true).then(changed => { if (changed && !S) show(tab); });
   libDaily(false);
 })();

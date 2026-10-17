@@ -145,3 +145,42 @@ s{color:var(--bad)}
 #libprompt{display:none;max-width:720px;margin:0 auto;padding:6px 16px 8px;gap:8px;align-items:center;flex-wrap:wrap;font-size:14px;background:var(--card);border-top:1px solid var(--line)}
 #libprompt span{flex:1;min-width:160px}
 @media (min-width:760px){#libprompt{max-width:900px;padding:6px 32px 8px}}
+
+/* ---- phone-first study screen: fits the screen, only the answer scrolls ---- */
+:root{--hh:130px}
+body.studying{overflow:hidden;height:100dvh}
+main.study{display:flex;flex-direction:column;max-width:720px;margin:0 auto;padding:8px 12px 6px;overflow:hidden;height:calc(100dvh - var(--hh) - env(safe-area-inset-top) - env(safe-area-inset-bottom))}
+main.study .prog{flex:none;margin-bottom:8px}
+main.study #cc{flex:1;min-height:0;margin-bottom:6px;display:flex;flex-direction:column}
+main.study #cc.card{overflow-y:auto;-webkit-overflow-scrolling:touch}
+main.study #ctl{flex:none}
+.swipe{flex:1;min-height:0;display:flex;position:relative;perspective:1400px}
+.drag{flex:1;min-width:0;display:flex;flex-direction:column;touch-action:none;perspective:none}
+.sc{flex:1;min-height:0;height:auto;position:relative}
+.face{overflow:hidden;padding:14px}
+.face .fc{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:center;overflow:hidden}
+.face .fc .q{margin:0;text-align:center}
+.bs{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;touch-action:none}
+.alert.min{cursor:pointer;padding:8px 12px;font-size:14px;border-color:var(--ok);background:rgba(76,195,138,.08)}
+.alert.badmin{border-color:var(--bad);background:rgba(255,123,114,.07)}
+.alert.okbox{border-color:var(--ok)}
+.dq{font-weight:600;margin-bottom:4px}
+@media (min-width:760px){main.study{max-width:900px;padding:12px 32px 8px}}
+@media (max-width:520px){
+  #tabs button{padding:10px 6px;font-size:15px}
+  .seg{padding:5px 10px}.seg button{min-height:34px;font-size:13px;padding:4px 2px}
+  main.study{padding:6px 10px 4px}
+  .face{padding:12px;border-radius:14px}.tint{border-radius:14px}
+  .face .q{font-size:19px}.ans{font-size:18px}.ans.list{font-size:17px}
+  .meta{margin-bottom:6px;font-size:12px}
+  main.study #ctl button{min-height:44px}
+  main.study #ctl .row2{margin-top:6px;flex-wrap:nowrap}
+  main.study #ctl .row2 .small{min-height:34px;flex:1;padding:4px 4px;font-size:13px}
+  .hint{margin-top:4px}
+}
+
+#tabs #pomo{flex:none;min-width:82px;padding:0 10px;border:0;border-left:1px solid var(--line);border-bottom:3px solid transparent;border-radius:0;background:none;min-height:0;font:inherit;font-weight:600;font-size:15px;font-variant-numeric:tabular-nums;color:var(--fg)}
+#tabs #pomo.run{color:var(--bad)}#tabs #pomo.brk{color:var(--ok)}
+#pomomenu{display:none;max-width:720px;margin:0 auto;padding:6px 12px;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);background:var(--card)}
+#pomomenu span{margin-left:auto;font-size:13px}
+@media (min-width:760px){#pomomenu{max-width:900px;padding:6px 32px}}
