@@ -352,7 +352,7 @@ function toast(msg, undo) {
   let t = $('#toast'); if (!t) { t = document.createElement('div'); t.id = 'toast'; document.body.appendChild(t); }
   t.innerHTML = `${esc(msg)}${undo ? ' <button class="small" id="tundo">Undo</button>' : ''}`; t.classList.add('on');
   if (undo) $('#tundo').onclick = () => { undo(); t.classList.remove('on'); };
-  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('on'), 7000);
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("on"), 10000);
 }
 function dropCard(c, v) {
   events.push({ id: uid(), k: 'drop', c: c.id, t: Date.now(), v }); save();
@@ -360,10 +360,15 @@ function dropCard(c, v) {
 function wireFlag(c) {
   const bk = $('#back'); if (bk) bk.onclick = undoLast;
   const dp = $('#drop');
+  // two taps on the same button: the first arms it for 3 s, the second discards (no dialog elsewhere on the screen)
   if (dp) dp.onclick = () => {
-    dropCard(c, 1);
+    if (!dp.classList.contains('arm')) {
+      dp.classList.add('arm'); dp.textContent = 'Tap again to discard';
+      clearTimeout(dp._h); dp._h = setTimeout(() => { dp.classList.remove('arm'); dp.textContent = '🗑 Not needed'; }, 3000); return;
+    }
+    clearTimeout(dp._h); dropCard(c, 1);
     if (S) { S.queue = S.queue.filter((x, i) => i < S.i || x.id !== c.id); viewStudy(); }
-    toast('Card discarded. It will not come back.', () => { dropCard(c, 0); });
+    toast('Card discarded. Settings → Your edits to restore it.', () => { dropCard(c, 0); if (S) { S.queue.splice(S.i, 0, c); viewStudy(); } });
   };
   const f = $('#flag'); if (!f) return;
   f.onclick = () => { const note = prompt('What is wrong with this card?'); if (note) { events.push({ id: uid(), k: 'flag', c: c.id, t: Date.now(), note }); save(); f.textContent = 'Flagged'; f.disabled = true; } };
@@ -592,9 +597,10 @@ function viewSettings() {
     $('#dupgo').onclick = viewDups;
   })();
   (() => {
-    derive(); const dropped = deck.cards.filter(c => _dset.has(c.id)), fixes = [];
+    derive(); const dt = {}; for (const e of events) if (e.k === 'drop' && e.v) dt[e.c] = e.t;
+    const dropped = deck.cards.filter(c => _dset.has(c.id)).sort((a, b) => (dt[b.id] || 0) - (dt[a.id] || 0)), fixes = [];
     for (const c of deck.cards) { const m = spellOf(c.id); for (const s of c.spell || []) if (m[s.bad] === 'ok') fixes.push(`${s.bad} → ${s.good}   (${c.q.slice(0, 50)})`); }
-    $('#edits').innerHTML = `<b>${fixes.length}</b> spelling fixes approved${fixes.length ? ` <button class="small" id="cpf">Copy list for my sheets</button><textarea id="fxl" rows="4" readonly style="margin-top:8px">${esc(fixes.join('\\n'))}</textarea>` : ''}<br><b>${dropped.length}</b> cards discarded${dropped.length ? `<div style="margin-top:8px">${dropped.slice(0, 100).map(c => `<div class="fix">${esc(c.q.replace(/\\{\\{c\\d+::(.*?)\\}\\}/g, '$1').slice(0, 80))} <button class="mini" data-restore="${esc(c.id)}">restore</button></div>`).join('')}</div>` : ''}`;
+    $('#edits').innerHTML = `<b>${fixes.length}</b> spelling fixes approved${fixes.length ? ` <button class="small" id="cpf">Copy list for my sheets</button><textarea id="fxl" rows="4" readonly style="margin-top:8px">${esc(fixes.join('\\n'))}</textarea>` : ''}<br><b>${dropped.length}</b> cards discarded${dropped.length ? `<div style="margin-top:8px">${dropped.slice(0, 100).map(c => `<div class="fix"><small class="muted">${dt[c.id] ? new Date(dt[c.id]).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}</small> ${esc(c.q.replace(/\\{\\{c\\d+::(.*?)\\}\\}/g, '$1').slice(0, 80))} <button class="mini" data-restore="${esc(c.id)}">restore</button></div>`).join('')}</div>` : ''}`;
     if ($('#cpf')) $('#cpf').onclick = () => { $('#fxl').select(); navigator.clipboard?.writeText(fixes.join('\\n')).catch(() => {}); };
     document.querySelectorAll('[data-restore]').forEach(b => b.onclick = () => { events.push({ id: uid(), k: 'drop', c: b.dataset.restore, t: Date.now(), v: 0 }); save(); viewSettings(); });
   })();
