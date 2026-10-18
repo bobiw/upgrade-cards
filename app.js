@@ -18,17 +18,18 @@ let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, che
 let S = null; // study session
 // paused sessions survive closing the app: { study: {...}, quiz: { topic: {...} } }, saved after every answer
 let sessions = { study: null, quiz: {} };
-const sessKey = () => S?.quiz ? ['quiz', S.quiz] : ['study'];
+const REDO = ' · missed';                       // a missed-only drill is saved beside its quiz
+const sessKey = () => S?.quiz ? ['quiz', S.quiz + (S.redo ? REDO : '')] : ['study'];
 function saveSess() {
   if (!S) return;
-  const v = S.i < S.queue.length ? { ids: S.queue.map(c => c.id), i: S.i, done: S.done, rl: S.rl, total: S.total, qn: S.qn, qok: S.qok, miss: (S.miss || []).map(c => c.id), deck: settings.deck, t: Date.now() } : null;
+  const v = S.i < S.queue.length ? { ids: S.queue.map(c => c.id), i: S.i, done: S.done, rl: S.rl, total: S.total, qn: S.qn, qok: S.qok, miss: (S.miss || []).map(c => c.id), round: S.round, retry: (S.retry || []).map(c => c.id), redo: S.redo, roundStart: S.roundStart, deck: settings.deck, t: Date.now() } : null;
   const [k, t] = sessKey(); if (t) { if (v) sessions.quiz[t] = v; else delete sessions.quiz[t]; } else sessions.study = v;
   kvSet('sessions', sessions);
 }
 function resumeSess(saved, quiz) {
   const q = saved.ids.map(byId).filter(Boolean); if (!q.length) return;
   S = { queue: q, i: Math.min(saved.i, q.length), shown: false, t0: Date.now(), total: saved.total, done: saved.done || 0, rl: saved.rl || {}, hist: [] };
-  if (quiz) Object.assign(S, { quiz, qn: saved.qn || 0, qok: saved.qok || 0, miss: (saved.miss || []).map(byId).filter(Boolean) });
+  if (quiz) Object.assign(S, { quiz: quiz.replace(REDO, ''), redo: !!saved.redo, round: saved.round || 1, roundStart: saved.roundStart || 0, retry: (saved.retry || []).map(byId).filter(Boolean), qn: saved.qn || 0, qok: saved.qok || 0, miss: (saved.miss || []).map(byId).filter(Boolean) });
   viewStudy();
 }
 const save = () => kvSet('events', events);
@@ -278,10 +279,12 @@ const quizLabel = t => t.replace(/ review$/, '').replace(/^Upgrade /, '');
 const quizTopics = () => [...new Set(deck.cards.filter(c => c.area === 'key').map(c => c.topic))].sort((a, b) => ((QUIZ_ORDER.indexOf(a) + 1 || 99) - (QUIZ_ORDER.indexOf(b) + 1 || 99)) || a.localeCompare(b, undefined, { numeric: true }));
 const noScore = c => c.noscore || /^(Not answerable|I don't know)/.test(c.a || '');
 const quizCards = t => deck.cards.filter(c => c.topic === t && !isDropped(c.id)).sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+const quizState = t => ({ quiz: t, qn: 0, qok: 0, miss: [], retry: [], round: 1, roundStart: 0 });
+function startRedo(t, cards) { if (!cards.length) return; delete sessions.quiz[t + REDO]; S = { queue: mix(cards, replay()), i: 0, shown: false, t0: Date.now(), total: cards.length, done: 0, rl: {}, ...quizState(t), redo: true }; viewStudy(); }
 function quizBox() {
   const q = quizTopics().map(t => [t, quizLabel(t), quizCards(t).length]).filter(x => x[2]);
   if (!q.length) return '';
-  return `<div class="card" style="margin-top:12px"><div class="q" style="font-size:1.05em">Review quizzes</div><p class="muted">The company tests, in order, with a score at the end.</p><div class="qz">${q.map(([t, l, n]) => { const r = settings.quiz?.[t]; const p = sessions.quiz[t]; return `<button data-quiz="${esc(t)}"${p ? ' class="paused"' : ''}><b>${esc(l)}</b><small>${p ? `▶ resume at ${p.i + 1} of ${p.ids.length}` : `${n} questions${r ? ` · last ${r.ok}/${r.n}` : ''}`}</small></button>`; }).join('')}</div>${q.filter(([t]) => sessions.quiz[t]).map(([t, l]) => `<div class="qrs"><span>${esc(l)} paused at ${sessions.quiz[t].i + 1}</span><button class="small" data-qrestart="${esc(t)}">Start over</button></div>`).join('')}</div>`;
+  return `<div class="card" style="margin-top:12px"><div class="q" style="font-size:1.05em">Review quizzes</div><p class="muted">The company tests, in order, with a score at the end.</p><div class="qz">${q.map(([t, l, n]) => { const r = settings.quiz?.[t]; const p = sessions.quiz[t]; return `<button data-quiz="${esc(t)}"${p ? ' class="paused"' : ''}><b>${esc(l)}</b><small>${p ? `▶ resume at ${p.i + 1} of ${p.ids.length}` : `${n} questions${r ? ` · last ${r.ok}/${r.n}` : ''}`}</small></button>`; }).join('')}</div>${q.filter(([t]) => sessions.quiz[t]).map(([t, l]) => `<div class="qrs"><span>${esc(l)} paused at ${sessions.quiz[t].i + 1}</span><button class="small" data-qrestart="${esc(t)}">Start over</button></div>`).join('')}${q.filter(([t]) => sessions.quiz[t + REDO] || settings.quizMiss?.[t]?.length).map(([t, l]) => { const p = sessions.quiz[t + REDO]; return `<div class="qrs"><span>${esc(l)}: ${p ? `missed drill paused at ${p.i + 1} of ${p.ids.length}` : `${settings.quizMiss[t].length} missed last time`}</span><button class="small" data-qredo="${esc(t)}">${p ? 'Resume drill' : 'Redo missed'}</button></div>`; }).join('')}</div>`;
 }
 
 // ---------- study ----------
@@ -300,22 +303,27 @@ function viewStudy() {
     if ($('#more')) $('#more').onclick = () => go(buildQueue(true).queue);
     if ($('#wk')) $('#wk').onclick = () => go(mix(weakQueue(), b.st));
     if ($('#rv')) $('#rv').onclick = () => go(mix(reviewQueue(), b.st));
-    document.querySelectorAll('[data-quiz]').forEach(x => x.onclick = () => { const t = x.dataset.quiz; if (sessions.quiz[t]) resumeSess(sessions.quiz[t], t); else go(quizCards(t), { quiz: t, qn: 0, qok: 0, miss: [] }); });
-    document.querySelectorAll('[data-qrestart]').forEach(x => x.onclick = () => { const t = x.dataset.qrestart; delete sessions.quiz[t]; kvSet('sessions', sessions); go(quizCards(t), { quiz: t, qn: 0, qok: 0, miss: [] }); });
+    document.querySelectorAll('[data-quiz]').forEach(x => x.onclick = () => { const t = x.dataset.quiz; if (sessions.quiz[t]) resumeSess(sessions.quiz[t], t); else go(quizCards(t), quizState(t)); });
+    document.querySelectorAll('[data-qrestart]').forEach(x => x.onclick = () => { const t = x.dataset.qrestart; delete sessions.quiz[t]; kvSet('sessions', sessions); go(quizCards(t), quizState(t)); });
+    document.querySelectorAll('[data-qredo]').forEach(x => x.onclick = () => { const t = x.dataset.qredo, p = sessions.quiz[t + REDO]; if (p) return resumeSess(p, t + REDO); startRedo(t, (settings.quizMiss?.[t] || []).map(byId).filter(Boolean)); });
     return;
   }
   saveSess();
   if (S.i >= S.queue.length) {
     studyMode(false); syncNow(true);
     if (S.quiz) {
-      (settings.quiz ||= {})[S.quiz] = { ok: S.qok, n: S.qn, t: Date.now() }; kvSet('settings', settings);
-      $('#main').innerHTML = `<div class="card"><div class="q">${esc(S.quiz)}: ${S.qok} / ${S.qn}${S.qn ? ` (${Math.round(S.qok / S.qn * 100)}%)` : ''}</div><p class="muted">Questions your library can't answer (they need a chart or a manual you don't have) were shown, not scored.</p>${S.miss.length ? `<p><b>Missed</b></p>${S.miss.map(c => `<p class="muted">${esc(c.q.split('\n')[0].slice(0, 140))}<br><b>${esc(c.a || '')}</b> · ${esc(c.cite || '')}</p>`).join('')}` : ''}<button class="pri" id="fin">Back</button></div>`;
+      if (!S.redo) (settings.quiz ||= {})[S.quiz] = { ok: S.qok, n: S.qn, t: Date.now() };
+      (settings.quizMiss ||= {})[S.quiz] = S.miss.map(c => c.id); if (!S.miss.length) delete settings.quizMiss[S.quiz];
+      kvSet('settings', settings);
+      const title = S.redo ? `Missed drill (${esc(S.quiz)}): ${S.qok} / ${S.qn} right first time` : `${esc(S.quiz)}: ${S.qok} / ${S.qn}${S.qn ? ` (${Math.round(S.qok / S.qn * 100)}%)` : ''}`;
+      $('#main').innerHTML = `<div class="card"><div class="q">${title}</div>${S.round > 1 ? `<p>Every missed question answered right after ${S.round} rounds.</p>` : ''}<p class="muted">The score counts your first answer only. Questions your library can't answer (they need a chart or a manual you don't have) were shown, not scored.</p>${S.miss.length ? `<button class="pri" style="width:100%;margin-bottom:10px" id="rdm">Redo the ${S.miss.length} I missed</button><p><b>Missed</b></p>${S.miss.map(c => `<p class="muted">${esc(c.q.split('\n')[0].slice(0, 140))}<br><b>${esc(c.a || '')}</b> · ${esc(c.cite || '')}</p>`).join('')}` : ''}<button class="${S.miss.length ? '' : 'pri'}" id="fin">Back</button></div>`;
+      const t = S.quiz, m = S.miss.slice(); if ($('#rdm')) $('#rdm').onclick = () => startRedo(t, m);
     } else
     $('#main').innerHTML = `<div class="card"><div class="q">Session done</div><p class="muted">${S.done} answers.</p><button class="pri" id="fin">Back</button></div>`;
     $('#fin').onclick = () => { S = null; viewStudy(); }; return;
   }
   studyMode(true); S.cur = null; const c = S.queue[S.i]; S.t0 = Date.now(); S.shown = false; S.errors = 0; S.pos = 0;
-  const prog = `<div class="prog"><i style="width:${S.i / S.queue.length * 100}%"></i></div>`;
+  const prog = `<div class="prog"><i style="width:${S.i / S.queue.length * 100}%"></i></div>` + (S.quiz && S.round > 1 ? `<div class="rnd">Round ${S.round}: the ${S.queue.length - S.roundStart} you missed · ${S.queue.length - S.i} left</div>` : S.quiz && S.redo ? `<div class="rnd">Missed drill · ${S.queue.length - S.i} left</div>` : '');
   const body = { flip: rFlip, cloze: rCloze, mc: rMc, typed: rTyped, steps: rSteps }[c.type] || rFlip;
   $('#main').innerHTML = prog + `<div class="card" id="cc">${head(c)}</div><div id="ctl"></div>`;
   body(c);
@@ -327,7 +335,13 @@ function done(c, g) {
   S.rl ||= {}; S.hist ||= [];
   const h = { id: ev.id, c, i: S.i, prevRl: S.rl[c.id], pos: null };
   const put = k => { h.pos = Math.min(S.queue.length, S.i + 1 + k); S.queue.splice(h.pos, 0, c); };
-  if (S.quiz) { h.quiz = !noScore(c); if (h.quiz) { S.qn++; if (g > 1) S.qok++; else S.miss.push(c); h.qok = g > 1; } S.hist.push(h); S.i++; return viewStudy(); }
+  if (S.quiz) {                                 // first answer is scored; a miss comes back in the next round until it is answered right
+    h.quiz = !noScore(c) && S.round === 1; if (h.quiz) { S.qn++; if (g > 1) S.qok++; else S.miss.push(c); h.qok = g > 1; }
+    if (!noScore(c) && g === 1) { S.retry.push(c); h.retry = true; }
+    S.hist.push(h); S.i++;
+    if (S.i >= S.queue.length && S.retry.length) { h.roundAdd = S.retry.slice(); S.roundStart = S.queue.length; S.queue.push(...mix(S.retry, replay())); S.retry = []; S.round++; }
+    return viewStudy();
+  }
   if (g === 1) { S.rl[c.id] = 2; put(rnd(7, 11)); }                                   // missed: back after ~7-11 cards, again after that
   else if (S.rl[c.id] > 0) { S.rl[c.id]--; if (S.rl[c.id] > 0) put(rnd(14, 20)); else delete S.rl[c.id]; }
   S.hist.push(h); S.i++; viewStudy();
@@ -339,6 +353,8 @@ function undoLast() {
   events.push({ id: uid(), k: 'undo', c: h.c.id, t: Date.now(), ref: h.id }); save();
   if (h.pos != null && h.pos > h.i && S.queue[h.pos]?.id === h.c.id) S.queue.splice(h.pos, 1);
   if (h.prevRl === undefined) delete S.rl[h.c.id]; else S.rl[h.c.id] = h.prevRl;
+  if (h.roundAdd) { S.queue.length -= h.roundAdd.length; S.retry = h.roundAdd; S.round--; }
+  if (h.retry) S.retry.pop();
   if (h.quiz) { S.qn--; if (h.qok) S.qok--; else S.miss.pop(); }
   S.done = Math.max(0, S.done - 1); S.i = h.i; viewStudy();
 }

@@ -190,3 +190,4 @@ main.study #ctl{flex:none}
 .qz button.paused{border-color:var(--acc)}.qz button.paused small{color:var(--acc)}
 .qrs{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px;font-size:14px;color:var(--mut)}
 #drop.arm{background:var(--bad);color:#fff;border-color:var(--bad)}
+.rnd{font-size:13px;color:var(--warn);margin:4px 2px 6px;font-weight:600}
