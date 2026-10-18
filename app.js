@@ -16,6 +16,21 @@ const kvSet = (k, v) => new Promise((res, rej) => { const t = idb.transaction('k
 
 let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '', deck: 'mine', hideDups: true, refDark: 'auto' };
 let S = null; // study session
+// paused sessions survive closing the app: { study: {...}, quiz: { topic: {...} } }, saved after every answer
+let sessions = { study: null, quiz: {} };
+const sessKey = () => S?.quiz ? ['quiz', S.quiz] : ['study'];
+function saveSess() {
+  if (!S) return;
+  const v = S.i < S.queue.length ? { ids: S.queue.map(c => c.id), i: S.i, done: S.done, rl: S.rl, total: S.total, qn: S.qn, qok: S.qok, miss: (S.miss || []).map(c => c.id), deck: settings.deck, t: Date.now() } : null;
+  const [k, t] = sessKey(); if (t) { if (v) sessions.quiz[t] = v; else delete sessions.quiz[t]; } else sessions.study = v;
+  kvSet('sessions', sessions);
+}
+function resumeSess(saved, quiz) {
+  const q = saved.ids.map(byId).filter(Boolean); if (!q.length) return;
+  S = { queue: q, i: Math.min(saved.i, q.length), shown: false, t0: Date.now(), total: saved.total, done: saved.done || 0, rl: saved.rl || {}, hist: [] };
+  if (quiz) Object.assign(S, { quiz, qn: saved.qn || 0, qok: saved.qok || 0, miss: (saved.miss || []).map(byId).filter(Boolean) });
+  viewStudy();
+}
 const save = () => kvSet('events', events);
 
 // ---------- scheduler (events -> per-card state; replay is order-independent) ----------
@@ -266,7 +281,7 @@ const quizCards = t => deck.cards.filter(c => c.topic === t && !isDropped(c.id))
 function quizBox() {
   const q = quizTopics().map(t => [t, quizLabel(t), quizCards(t).length]).filter(x => x[2]);
   if (!q.length) return '';
-  return `<div class="card" style="margin-top:12px"><div class="q" style="font-size:1.05em">Review quizzes</div><p class="muted">The company tests, in order, with a score at the end.</p><div class="qz">${q.map(([t, l, n]) => { const r = settings.quiz?.[t]; return `<button data-quiz="${esc(t)}"><b>${esc(l)}</b><small>${n} questions${r ? ` · last ${r.ok}/${r.n}` : ''}</small></button>`; }).join('')}</div></div>`;
+  return `<div class="card" style="margin-top:12px"><div class="q" style="font-size:1.05em">Review quizzes</div><p class="muted">The company tests, in order, with a score at the end.</p><div class="qz">${q.map(([t, l, n]) => { const r = settings.quiz?.[t]; const p = sessions.quiz[t]; return `<button data-quiz="${esc(t)}"${p ? ' class="paused"' : ''}><b>${esc(l)}</b><small>${p ? `▶ resume at ${p.i + 1} of ${p.ids.length}` : `${n} questions${r ? ` · last ${r.ok}/${r.n}` : ''}`}</small></button>`; }).join('')}</div>${q.filter(([t]) => sessions.quiz[t]).map(([t, l]) => `<div class="qrs"><span>${esc(l)} paused at ${sessions.quiz[t].i + 1}</span><button class="small" data-qrestart="${esc(t)}">Start over</button></div>`).join('')}</div>`;
 }
 
 // ---------- study ----------
@@ -274,17 +289,22 @@ function viewStudy() {
   if (!deck.cards.length) return $('#main').innerHTML = `<div class="card"><div class="q">No deck loaded</div><p class="muted">Settings → Load deck file, and pick <b>deck.json</b>.</p></div>`;
   if (!S) {
     const b = buildQueue(false), weak = weakQueue().length;
-    $('#main').innerHTML = `<div class="grid"><div class="card"><div class="big">${b.dueN}</div><small>due</small></div><div class="card"><div class="big">${b.newN}</div><small>new today</small></div><div class="card"><div class="big">${weak}</div><small>weak</small></div></div>
+    const sv = sessions.study && sessions.study.i < sessions.study.ids.length ? sessions.study : null;
+    $('#main').innerHTML = (sv ? `<div class="card resume"><div><b>Paused session</b><small>card ${sv.i + 1} of ${sv.ids.length}</small></div><button class="pri" id="rsm">Resume</button><button class="small" id="rsx">Discard</button></div>` : '') + `<div class="grid"><div class="card"><div class="big">${b.dueN}</div><small>due</small></div><div class="card"><div class="big">${b.newN}</div><small>new today</small></div><div class="card"><div class="big">${weak}</div><small>weak</small></div></div>
       ${b.queue.length ? `<button class="pri" style="width:100%" id="go">Start ${b.queue.length} cards</button>` : `<div class="card"><div class="q">Nothing due.</div><p class="muted">${b.unseenN} unseen cards are held back by the daily limit.</p></div>`}
       <div class="row" style="margin-top:10px">${b.unseenN ? `<button id="more">Study unseen (${b.unseenN})</button>` : ''}${weak ? `<button id="wk">Drill weak (${weak})</button>` : ''}${reviewQueue().length ? `<button id="rv">My cards to check (${reviewQueue().length})</button>` : ''}</div>${quizBox()}`;
-    const go = q => { S = { queue: q.slice(), i: 0, shown: false, t0: Date.now(), total: q.length, done: 0, rl: {} }; viewStudy(); };
+    const go = (q, extra) => { S = { queue: q.slice(), i: 0, shown: false, t0: Date.now(), total: q.length, done: 0, rl: {}, ...extra }; viewStudy(); };
+    if ($('#rsm')) $('#rsm').onclick = () => resumeSess(sessions.study);
+    if ($('#rsx')) $('#rsx').onclick = () => { sessions.study = null; kvSet('sessions', sessions); viewStudy(); };
     if ($('#go')) $('#go').onclick = () => go(b.queue);
     if ($('#more')) $('#more').onclick = () => go(buildQueue(true).queue);
     if ($('#wk')) $('#wk').onclick = () => go(mix(weakQueue(), b.st));
     if ($('#rv')) $('#rv').onclick = () => go(mix(reviewQueue(), b.st));
-    document.querySelectorAll('[data-quiz]').forEach(x => x.onclick = () => { go(quizCards(x.dataset.quiz)); Object.assign(S, { quiz: x.dataset.quiz, qn: 0, qok: 0, miss: [] }); });
+    document.querySelectorAll('[data-quiz]').forEach(x => x.onclick = () => { const t = x.dataset.quiz; if (sessions.quiz[t]) resumeSess(sessions.quiz[t], t); else go(quizCards(t), { quiz: t, qn: 0, qok: 0, miss: [] }); });
+    document.querySelectorAll('[data-qrestart]').forEach(x => x.onclick = () => { const t = x.dataset.qrestart; delete sessions.quiz[t]; kvSet('sessions', sessions); go(quizCards(t), { quiz: t, qn: 0, qok: 0, miss: [] }); });
     return;
   }
+  saveSess();
   if (S.i >= S.queue.length) {
     studyMode(false); syncNow(true);
     if (S.quiz) {
@@ -831,6 +851,7 @@ document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.
   deck = (await kvGet('deck')) || deck;
   events = (await kvGet('events')) || [];
   settings = Object.assign(settings, (await kvGet('settings')) || {});
+  sessions = Object.assign({ study: null, quiz: {} }, (await kvGet('sessions')) || {});
   if (!settings.device) { settings.device = 'd' + uid().slice(0, 5); await kvSet('settings', settings); }
   navigator.storage?.persist?.();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
