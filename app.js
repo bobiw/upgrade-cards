@@ -28,7 +28,7 @@ function saveSess() {
 }
 function resumeSess(saved, quiz) {
   const q = saved.ids.map(byId).filter(Boolean); if (!q.length) return;
-  S = { queue: q, i: Math.min(saved.i, q.length), shown: false, t0: Date.now(), total: saved.total, done: saved.done || 0, rl: saved.rl || {}, hist: [] };
+  S = { queue: q, i: Math.min(saved.i, q.length), shown: false, t0: Date.now(), total: saved.total, done: saved.done || 0, rl: saved.rl || {}, hist: [], round: saved.round || 1, roundStart: saved.roundStart || 0, retry: (saved.retry || []).map(byId).filter(Boolean) };
   if (quiz) Object.assign(S, { quiz: quiz.replace(REDO, ''), redo: !!saved.redo, round: saved.round || 1, roundStart: saved.roundStart || 0, retry: (saved.retry || []).map(byId).filter(Boolean), qn: saved.qn || 0, qok: saved.qok || 0, miss: (saved.miss || []).map(byId).filter(Boolean) });
   viewStudy();
 }
@@ -323,7 +323,7 @@ function viewStudy() {
     $('#fin').onclick = () => { S = null; viewStudy(); }; return;
   }
   studyMode(true); S.cur = null; const c = S.queue[S.i]; S.t0 = Date.now(); S.shown = false; S.errors = 0; S.pos = 0;
-  const prog = `<div class="prog"><i style="width:${S.i / S.queue.length * 100}%"></i></div>` + (S.quiz && S.round > 1 ? `<div class="rnd">Round ${S.round}: the ${S.queue.length - S.roundStart} you missed · ${S.queue.length - S.i} left</div>` : S.quiz && S.redo ? `<div class="rnd">Missed drill · ${S.queue.length - S.i} left</div>` : '');
+  const prog = `<div class="prog"><i style="width:${S.i / S.queue.length * 100}%"></i></div>` + (S.round > 1 ? `<div class="rnd">${S.quiz ? 'Round' : 'Review round'} ${S.round}: the ${S.queue.length - S.roundStart} you missed · ${S.queue.length - S.i} left</div>` : S.quiz && S.redo ? `<div class="rnd">Missed drill · ${S.queue.length - S.i} left</div>` : '');
   const body = { flip: rFlip, cloze: rCloze, mc: rMc, typed: rTyped, steps: rSteps }[c.type] || rFlip;
   $('#main').innerHTML = prog + `<div class="card" id="cc">${head(c)}</div><div id="ctl"></div>`;
   body(c);
@@ -331,28 +331,21 @@ function viewStudy() {
 function done(c, g) {
   const ev = { id: uid(), c: c.id, t: Date.now(), g, ms: Date.now() - S.t0, d: settings.device };
   events.push(ev); save(); S.done++;
-  const rnd = (lo, hi) => lo + (Math.random() * (hi - lo + 1) | 0);
-  S.rl ||= {}; S.hist ||= [];
-  const h = { id: ev.id, c, i: S.i, prevRl: S.rl[c.id], pos: null };
-  const put = k => { h.pos = Math.min(S.queue.length, S.i + 1 + k); S.queue.splice(h.pos, 0, c); };
-  if (S.quiz) {                                 // first answer is scored; a miss comes back in the next round until it is answered right
-    h.quiz = !noScore(c) && S.round === 1; if (h.quiz) { S.qn++; if (g > 1) S.qok++; else S.miss.push(c); h.qok = g > 1; }
-    if (!noScore(c) && g === 1) { S.retry.push(c); h.retry = true; }
-    S.hist.push(h); S.i++;
-    if (S.i >= S.queue.length && S.retry.length) { h.roundAdd = S.retry.slice(); S.roundStart = S.queue.length; S.queue.push(...mix(S.retry, replay())); S.retry = []; S.round++; }
-    return viewStudy();
-  }
-  if (g === 1) { S.rl[c.id] = 2; put(rnd(7, 11)); }                                   // missed: back after ~7-11 cards, again after that
-  else if (S.rl[c.id] > 0) { S.rl[c.id]--; if (S.rl[c.id] > 0) put(rnd(14, 20)); else delete S.rl[c.id]; }
-  S.hist.push(h); S.i++; viewStudy();
+  // Sheppard style: a missed card is not shown again until the end of the session, where the misses are
+  // reviewed in rounds until each is answered right. In a quiz only the first answer is scored.
+  S.hist ||= []; S.retry ||= []; S.round ||= 1; S.roundStart ||= 0;
+  const h = { id: ev.id, c, i: S.i };
+  if (S.quiz) { h.quiz = !noScore(c) && S.round === 1; if (h.quiz) { S.qn++; if (g > 1) S.qok++; else S.miss.push(c); h.qok = g > 1; } }
+  if (g === 1 && !(S.quiz && noScore(c))) { S.retry.push(c); h.retry = true; }
+  S.hist.push(h); S.i++;
+  if (S.i >= S.queue.length && S.retry.length) { h.roundAdd = S.retry.slice(); S.roundStart = S.queue.length; S.queue.push(...mix(S.retry, replay())); S.retry = []; S.round++; }
+  viewStudy();
 }
 // go back one card: the answer is undone (kept in the log as an 'undo' so it merges across devices) and the card is shown again
 function undoLast() {
   if (!S?.hist?.length) return;
   const h = S.hist.pop();
   events.push({ id: uid(), k: 'undo', c: h.c.id, t: Date.now(), ref: h.id }); save();
-  if (h.pos != null && h.pos > h.i && S.queue[h.pos]?.id === h.c.id) S.queue.splice(h.pos, 1);
-  if (h.prevRl === undefined) delete S.rl[h.c.id]; else S.rl[h.c.id] = h.prevRl;
   if (h.roundAdd) { S.queue.length -= h.roundAdd.length; S.retry = h.roundAdd; S.round--; }
   if (h.retry) S.retry.pop();
   if (h.quiz) { S.qn--; if (h.qok) S.qok--; else S.miss.pop(); }
