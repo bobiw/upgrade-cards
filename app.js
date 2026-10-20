@@ -44,18 +44,14 @@ function maxIvl() {
 function step(s, e, cap) {
   s = s || { ease: 2.5, ivl: 0, reps: 0, lapses: 0, n: 0, ok: 0, first: e.t, rl: 0, streak: 0 };
   s.n++; if (e.g >= 2) s.ok++;
-  if (e.g === 1) { s.lapses++; s.reps = 0; s.streak = 0; s.rl = 2; s.ivl = 0; s.ease = Math.max(1.3, s.ease - .2); s.due = e.t + 10 * 60e3; }
+  // a miss is redone at the end of the session (Sheppard style), then the card simply starts over: due again tomorrow
+  if (e.g === 1) { s.lapses++; s.reps = 0; s.streak = 0; s.rl = 0; s.ivl = 1; s.ease = Math.max(1.3, s.ease - .2); s.due = e.t + DAY; }
   else {
     s.streak++;
-    if (s.rl > 0) {                      // relearning after a miss: two good answers spaced apart, then tomorrow
-      s.rl--;
-      if (s.rl > 0) s.due = e.t + 10 * 60e3;
-      else { s.ivl = Math.min(cap, e.g === 4 ? 2 : 1); s.reps = 1; s.due = e.t + s.ivl * DAY; }
-    } else {
+    {
       s.reps++;
       let i = s.reps === 1 ? { 2: 1, 3: 1, 4: 3 }[e.g] : s.reps === 2 ? { 2: 2, 3: 3, 4: 6 }[e.g]
         : s.ivl * { 2: 1.2, 3: s.ease, 4: s.ease * 1.3 }[e.g];
-      if (s.lapses >= 2 && s.streak < 5) i = Math.min(i, Math.max(1, Math.ceil(s.ivl * 1.5)));   // often-missed cards climb slowly
       s.ease = Math.min(3, Math.max(1.3, s.ease + { 2: -.15, 3: 0, 4: .15 }[e.g]));
       s.ivl = Math.min(cap, Math.max(1, Math.round(i)));
       s.due = e.t + s.ivl * DAY;
@@ -99,8 +95,8 @@ function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.ra
 
 // full shuffle, with a nudge toward weak areas and cards missed before, and no two same-topic cards in a row
 function mix(cards, st) {
-  const k = c => Math.random() - (c.weak ? .2 : 0) - Math.min(.3, (st[c.id]?.lapses || 0) * .1) - (st[c.id]?.rl > 0 ? .4 : 0);
-  const a = cards.map(c => [k(c), c]).sort((x, y) => x[0] - y[0]).map(x => x[1]), out = [];
+  // plain shuffle: missed or weak cards get no head start; only rule is no two same-topic cards in a row
+  const a = shuffle(cards.slice()), out = [];
   while (a.length) { const last = out[out.length - 1]?.topic; let i = a.findIndex(c => c.topic !== last); if (i < 0) i = 0; out.push(a.splice(i, 1)[0]); }
   return out;
 }
@@ -110,7 +106,7 @@ function buildQueue(extra) {
   const unseen = P.filter(c => !st[c.id]);
   const inPool = new Set(P.map(c => c.id)), newToday = Object.entries(st).filter(([id, s]) => inPool.has(id) && sameDay(s.first, now)).length;
   const allow = extra ? unseen.length : Math.max(0, settings.newPerDay - newToday);
-  const fresh = shuffle(unseen.slice()).sort((x, y) => (y.weak ? 1 : 0) - (x.weak ? 1 : 0)).slice(0, allow);
+  const fresh = shuffle(unseen.slice()).slice(0, allow);       // new cards drawn at random from the whole deck
   return { st, queue: mix(due.concat(fresh), st), dueN: due.length, newN: fresh.length, unseenN: unseen.length };
 }
 function weakQueue() {
