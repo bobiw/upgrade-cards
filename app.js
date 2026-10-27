@@ -84,6 +84,7 @@ function textOf(c, f) { if (f === 'a' && c.suggest?.a && suggOf(c.id) === 'ok') 
 const byId = id => deck.cards.find(x => x.id === id);
 function dupHidden(c) {
   derive();
+  if (c.dupOf && settings.hideDups) { const k = byId(c.dupOf); if (k && visible(k)) return true; }   // same fact again in the same deck
   if (deckOf(c) === 'claude') { for (const d of c.dup || []) { const v = _dupc[c.id + '|' + d.id]; if (v === 'mine') return true; if (!v && settings.hideDups && d.sim >= .6) return true; } return false; }
   for (const d of c.dupBy || []) if (_dupc[d.id + '|' + c.id] === 'claude') return true;
   return false;
@@ -521,7 +522,7 @@ function viewSettings() {
     <p class="note">Review gaps are capped at half the days left, so nothing is scheduled past the check.</p>
     <label for="np">New cards per day</label><input type="number" id="np" min="0" max="200" value="${settings.newPerDay}">
     <label><input type="checkbox" id="hd" ${settings.hideDrafts ? 'checked' : ''}> Hide DRAFT cards</label>
-    <label><input type="checkbox" id="hdup" ${settings.hideDups ? 'checked' : ''}> Hide Claude's cards that duplicate one of mine</label>
+    <label><input type="checkbox" id="hdup" ${settings.hideDups ? 'checked' : ''}> Hide duplicate cards (Claude's copy of one of mine, and repeats within a deck)</label>
     <label for="rdk">Manual page viewer</label><select id="rdk"><option value="auto">Dark when the device is dark</option><option value="on">Always dark</option><option value="off">Always light</option></select></div>
     <div class="card"><b>Pomodoro timer</b><p class="note" id="pmn"></p>
     <div class="row" style="gap:10px"><div style="flex:1"><label for="pf1">Focus (min)</label><input type="number" id="pf1" min="1" max="120"></div><div style="flex:1"><label for="pf2">Short break</label><input type="number" id="pf2" min="1" max="60"></div><div style="flex:1"><label for="pf3">Long break</label><input type="number" id="pf3" min="1" max="90"></div><div style="flex:1"><label for="pf4">Long every</label><input type="number" id="pf4" min="2" max="12"></div></div>
