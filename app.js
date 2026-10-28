@@ -889,8 +889,8 @@ async function viewListen() {
       for (const c of b.chapters) {
         const got = have[c.file], stale = got && got !== c.sha, pos = L.pos[c.file];
         if (got) used += c.size; if (stale) upd++;
-        rows.push(`<div class="arow"><div><b>${esc(c.title)}</b><small>${mins(c.dur)} · ${(c.size / 1048576).toFixed(0)} MB${pos > 5 ? ' · at ' + clock(pos) : ''}${stale ? ' · <span class="tag draft">update available</span>' : ''}</small></div>
-          ${got ? `<button class="small pri" data-ap="${esc(c.file)}">▶︎</button>${stale ? `<button class="small" data-ad="${esc(c.file)}">Update</button>` : ''}<button class="small" data-ax="${esc(c.file)}" title="Remove from this device">✕</button>` : `<button class="small" data-ad="${esc(c.file)}">Download</button>`}</div>`);
+        rows.push(`<div class="arow"><b>${esc(c.title)}</b><small>${mins(c.dur)} · ${(c.size / 1048576).toFixed(0)} MB${pos > 5 ? ' · at ' + clock(pos) : ''}${stale ? '<span class="upd">● New version</span>' : ''}</small><span class="abtn">
+          ${got ? `<button class="small pri" data-ap="${esc(c.file)}" aria-label="Play">▶︎</button>${stale ? `<button class="small updb" data-ad="${esc(c.file)}">Update</button>` : ''}<button class="small" data-ax="${esc(c.file)}" title="Remove from this device" aria-label="Remove from this device">✕</button>` : `<button class="small" data-ad="${esc(c.file)}">Download</button>`}</span></div>`);
       }
       rows.push('</div>');
     }

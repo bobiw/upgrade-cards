@@ -2,7 +2,7 @@
 @media (prefers-color-scheme:dark){:root{--bg:#0f1720;--fg:#e8edf2;--mut:#93a1ae;--card:#18232f;--line:#2b3947;--acc:#6aa7ff;--ok:#4cc38a;--bad:#ff7b72;--warn:#e3b341;--blank:#4a3d12}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.45 -apple-system,system-ui,sans-serif;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);-webkit-text-size-adjust:100%}
-header{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);z-index:2}
+header{position:sticky;top:0;padding-top:env(safe-area-inset-top);margin-top:calc(-1 * env(safe-area-inset-top));background:var(--bg);border-bottom:1px solid var(--line);z-index:2}
 #tabs{display:flex;max-width:720px;margin:0 auto}
 #tabs button{flex:1;padding:14px 8px;background:none;border:0;color:var(--mut);font:inherit;font-weight:600;border-bottom:3px solid transparent}
 #tabs button.on{color:var(--fg);border-color:var(--acc)}
@@ -191,6 +191,10 @@ main.study #ctl{flex:none}
 .qrs{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px;font-size:14px;color:var(--mut)}
 #drop.arm{background:var(--bad);color:#fff;border-color:var(--bad)}
 .rnd{font-size:13px;color:var(--warn);margin:4px 2px 6px;font-weight:600}
-.arow{display:flex;gap:6px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}.arow>div{flex:1;min-width:0}.arow small{display:block;color:var(--mut)}
+/* chapter row: title on its own line, then details on the left and buttons on the right, so nothing wraps on a phone */
+.arow{display:grid;grid-template-columns:1fr auto;gap:2px 8px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
+.arow b{grid-column:1/-1;line-height:1.25}.arow small{color:var(--mut);min-width:0}
+.arow .upd{display:block;color:var(--warn);white-space:nowrap}.arow .abtn{display:flex;gap:6px}
+.arow button.small{min-width:44px;min-height:40px}.arow button.updb{color:var(--warn);border-color:var(--warn)}
 #now .nt{font-weight:600;margin-bottom:8px}button.sec{display:block;width:100%;text-align:left;margin-top:4px}
 #now .row>button{min-width:0;padding-left:6px;padding-right:6px}
