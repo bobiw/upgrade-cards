@@ -342,6 +342,7 @@ function done(c, g) {
 function undoLast() {
   if (!S?.hist?.length) return;
   const h = S.hist.pop();
+  if (h.skip) { S.i = h.i; viewStudy(); return; }               // a skipped question: nothing was logged, just show it again
   events.push({ id: uid(), k: 'undo', c: h.c.id, t: Date.now(), ref: h.id }); save();
   if (h.roundAdd) { S.queue.length -= h.roundAdd.length; S.retry = h.roundAdd; S.round--; }
   if (h.retry) S.retry.pop();
@@ -430,18 +431,33 @@ function rSwipe(c, front, back) {
 }
 document.addEventListener('keydown', e => {
   if (!S?.cur || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
-  if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); S.cur.flip(); }
+  if ((e.key === ' ' || e.key === 'Enter') && S.cur.flip) { e.preventDefault(); S.cur.flip(); }
   else if (e.key === 'ArrowRight') S.cur.grade(3); else if (e.key === 'ArrowLeft') S.cur.grade(1);
 });
+// multiple choice: tap a choice to answer, or swipe left to go on without answering (not scored) and right to go back,
+// so a quiz can be paged through in class at the instructor's pace (arrow keys do the same)
+function skipCard(c) { (S.hist ||= []).push({ skip: true, c, i: S.i }); S.i++; viewStudy(); }
 function rMc(c) {
-  $('#cc').insertAdjacentHTML('beforeend', `<div class="q">${qHtml(c.q)}</div><div style="margin-top:12px">${c.choices.map((x, i) => `<button class="choice" data-i="${i}">${esc(x)}</button>`).join('')}</div>`);
+  $('#cc').insertAdjacentHTML('beforeend', `<div class="mcs"><div class="q">${qHtml(c.q)}</div><div style="margin-top:12px">${c.choices.map((x, i) => `<button class="choice" data-i="${i}">${esc(x)}</button>`).join('')}</div><p class="note" style="text-align:center;margin:4px 0 0">Swipe ← next without answering · → back</p></div>`);
+  let ans = null;                                                 // set once answered: then a left swipe is the Next button
+  const next = () => ans ? done(c, ans) : skipCard(c);
+  S.cur = { grade: g => g === 3 ? next() : undoLast() };
+  const m = $('#cc .mcs'); let x0 = null, y0 = 0, dx = 0, swiped = false;
+  m.onpointerdown = e => { x0 = e.clientX; y0 = e.clientY; dx = 0; swiped = false; m.style.transition = 'none'; };
+  m.onpointermove = e => { if (x0 === null) return; dx = e.clientX - x0; if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(e.clientY - y0)) { swiped = true; m.style.transform = `translate3d(${dx}px,0,0)`; } };
+  const end = () => {
+    if (x0 === null) return; x0 = null; m.style.transition = 'transform .15s ease-out';
+    if (swiped && dx < -60) next(); else if (swiped && dx > 60 && S.hist?.length) undoLast(); else m.style.transform = '';
+  };
+  m.onpointerup = end; m.onpointercancel = end;
   $('#cc').querySelectorAll('.choice').forEach(b => b.onclick = () => {
-    const i = +b.dataset.i, ok = i === c.correct;
+    if (swiped) return;
+    const i = +b.dataset.i, ok = i === c.correct; ans = ok ? 3 : 1;
     $('#cc').querySelectorAll('.choice').forEach((x, j) => { x.disabled = true; if (j === c.correct) x.classList.add('right'); });
     if (!ok) b.classList.add('wrong');
     reveal(c, c.a ? `<div class="a">${rich(c.a)}</div>` : '');
     $('#ctl').innerHTML = `<button class="pri" style="width:100%" id="nx">Next</button>${flagBtn(c)}`;
-    $('#nx').onclick = () => done(c, ok ? 3 : 1); wireFlag(c);
+    $('#nx').onclick = next; wireFlag(c);
   });
 }
 // typed recall with word diff
