@@ -16,7 +16,7 @@ const kvSet = (k, v) => new Promise((res, rej) => { const t = idb.transaction('k
 
 let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '', deck: 'mine', hideDups: true, refDark: 'auto' };
 let S = null; // study session
-const APP = 'v16';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
+const APP = 'v17';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
 // paused sessions survive closing the app: { study: {...}, quiz: { topic: {...} } }, saved after every answer
 let sessions = { study: null, quiz: {} };
 const REDO = ' · missed';                       // a missed-only drill is saved beside its quiz
@@ -439,20 +439,39 @@ document.addEventListener('keydown', e => {
 // multiple choice: tap a choice to answer, or swipe left to go on without answering (not scored) and right to go back,
 // so a quiz can be paged through in class at the instructor's pace (arrow keys do the same)
 const goBack = () => S.hist?.length ? undoLast() : S.i > 0 && (S.i--, viewStudy());   // no history (paused before v16): just show the previous one
+let mcIn = 0;                                    // side the next multiple-choice card slides in from (-1 left, 1 right)
 function skipCard(c) { (S.hist ||= []).push({ skip: true, c, i: S.i }); S.i++; viewStudy(); }
 function rMc(c) {
   $('#cc').insertAdjacentHTML('beforeend', `<div class="mcs"><div class="q">${qHtml(c.q)}</div><div style="margin-top:12px">${c.choices.map((x, i) => `<button class="choice" data-i="${i}">${esc(x)}</button>`).join('')}</div><p class="note" style="text-align:center;margin:4px 0 0">Swipe ← next without answering · → back</p></div>`);
   let ans = null;                                                 // set once answered: then a left swipe is the Next button
   const next = () => ans ? done(c, ans) : skipCard(c);
-  S.cur = { grade: g => g === 3 ? next() : goBack() };
-  // the whole card takes the swipe (on an iPad most of it is empty space below the choices); only the question moves
-  const cc = $('#cc'), m = cc.querySelector('.mcs'); let x0 = null, y0 = 0, dx = 0, swiped = false;
+  // the whole card takes the swipe (on an iPad most of it is empty space below the choices) and follows the finger;
+  // let go past 60 px or with a flick and it flies off, and the next card slides in from the other side
+  const cc = $('#cc'); let x0 = null, y0 = 0, t0 = 0, dx = 0, v = 0, swiped = false, busy = false, raf = 0;
   cc.classList.add('mcsw');
-  cc.onpointerdown = e => { x0 = e.clientX; y0 = e.clientY; dx = 0; swiped = false; m.style.transition = 'none'; };
-  cc.onpointermove = e => { if (x0 === null) return; dx = e.clientX - x0; if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(e.clientY - y0)) { swiped = true; m.style.transform = `translate3d(${dx}px,0,0)`; } };
+  if (mcIn) { cc.style.setProperty('--x', mcIn * 48 + 'px'); cc.classList.add('mcin'); mcIn = 0; }
+  const paint = () => { raf = 0; cc.style.transform = `translate3d(${dx}px,0,0) rotate(${dx / 120}deg)`; cc.style.opacity = 1 - Math.min(.35, Math.abs(dx) / 900); };
+  const go = (dir, f) => {                                          // dir -1 = next (out to the left), +1 = back
+    busy = true; cc.style.transition = 'transform .17s ease-in, opacity .17s ease-in';
+    cc.style.transform = `translate3d(${dir * 110}%,0,0) rotate(${dir * 4}deg)`; cc.style.opacity = 0;
+    setTimeout(() => { mcIn = -dir; f(); }, 150);
+  };
+  const back = () => S.i > 0 && go(1, goBack);
+  S.cur = { grade: g => busy || (g === 3 ? go(-1, next) : back()) };
+  cc.onpointerdown = e => { if (busy) return; x0 = e.clientX; y0 = e.clientY; t0 = e.timeStamp; dx = 0; v = 0; swiped = false; cc.style.transition = 'none'; };
+  cc.onpointermove = e => {
+    if (x0 === null) return; const nx = e.clientX - x0;
+    if (!swiped && (Math.abs(nx) < 10 || Math.abs(nx) < Math.abs(e.clientY - y0))) return;
+    swiped = true; v = (nx - dx) / Math.max(1, e.timeStamp - t0); t0 = e.timeStamp;
+    dx = nx > 0 && S.i === 0 ? nx / 4 : nx;                       // nothing before question 1: resist
+    if (!raf) raf = requestAnimationFrame(paint);
+  };
   const end = () => {
-    if (x0 === null) return; x0 = null; m.style.transition = 'transform .15s ease-out';
-    if (swiped && dx < -60) next(); else if (swiped && dx > 60 && S.i > 0) goBack(); else m.style.transform = '';
+    if (x0 === null) return; x0 = null; cancelAnimationFrame(raf); raf = 0;
+    const fl = Math.abs(v) > .5 && Math.abs(dx) > 24;
+    if (swiped && (dx < -60 || (fl && v < 0))) return go(-1, next);
+    if (swiped && (dx > 60 || (fl && v > 0)) && S.i > 0) return back();
+    cc.style.transition = 'transform .25s cubic-bezier(.2,.9,.3,1.2), opacity .25s'; cc.style.transform = ''; cc.style.opacity = '';
   };
   cc.onpointerup = end; cc.onpointercancel = end;
   $('#cc').querySelectorAll('.choice').forEach(b => b.onclick = () => {
@@ -462,7 +481,7 @@ function rMc(c) {
     if (!ok) b.classList.add('wrong');
     reveal(c, c.a ? `<div class="a">${rich(c.a)}</div>` : '');
     $('#ctl').innerHTML = `<button class="pri" style="width:100%" id="nx">Next</button>${flagBtn(c)}`;
-    $('#nx').onclick = next; wireFlag(c);
+    $('#nx').onclick = () => busy || go(-1, next); wireFlag(c);
   });
 }
 // typed recall with word diff
