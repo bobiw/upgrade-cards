@@ -198,4 +198,4 @@ main.study #ctl{flex:none}
 .arow button.small{min-width:44px;min-height:40px}.arow button.updb{color:var(--warn);border-color:var(--warn)}
 #now .nt{font-weight:600;margin-bottom:8px}button.sec{display:block;width:100%;text-align:left;margin-top:4px}
 #now .row>button{min-width:0;padding-left:6px;padding-right:6px}
-.mcs,.mcs button{touch-action:pan-y;user-select:none;-webkit-user-select:none}
+.mcsw,.mcsw *{touch-action:pan-y}.mcs,.mcs button{user-select:none;-webkit-user-select:none}

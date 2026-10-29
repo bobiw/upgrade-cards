@@ -16,6 +16,7 @@ const kvSet = (k, v) => new Promise((res, rej) => { const t = idb.transaction('k
 
 let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '', deck: 'mine', hideDups: true, refDark: 'auto' };
 let S = null; // study session
+const APP = 'v15';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
 // paused sessions survive closing the app: { study: {...}, quiz: { topic: {...} } }, saved after every answer
 let sessions = { study: null, quiz: {} };
 const REDO = ' · missed';                       // a missed-only drill is saved beside its quiz
@@ -320,7 +321,7 @@ function viewStudy() {
     $('#fin').onclick = () => { S = null; viewStudy(); }; return;
   }
   studyMode(true); S.cur = null; const c = S.queue[S.i]; S.t0 = Date.now(); S.shown = false; S.errors = 0; S.pos = 0;
-  const prog = `<div class="prog"><i style="width:${S.i / S.queue.length * 100}%"></i></div>` + (S.round > 1 ? `<div class="rnd">${S.quiz ? 'Round' : 'Review round'} ${S.round}: the ${S.queue.length - S.roundStart} you missed · ${S.queue.length - S.i} left</div>` : S.quiz && S.redo ? `<div class="rnd">Missed drill · ${S.queue.length - S.i} left</div>` : '');
+  const prog = `<div class="prog"><i style="width:${S.i / S.queue.length * 100}%"></i></div>` + (S.round > 1 ? `<div class="rnd">${S.quiz ? 'Round' : 'Review round'} ${S.round}: the ${S.queue.length - S.roundStart} you missed · ${S.queue.length - S.i} left</div>` : S.quiz ? `<div class="rnd">${S.redo ? 'Missed drill · ' : ''}Question ${S.i + 1} of ${S.queue.length}</div>` : '');
   const body = { flip: rFlip, cloze: rCloze, mc: rMc, typed: rTyped, steps: rSteps }[c.type] || rFlip;
   $('#main').innerHTML = prog + `<div class="card" id="cc">${head(c)}</div><div id="ctl"></div>`;
   body(c);
@@ -442,14 +443,16 @@ function rMc(c) {
   let ans = null;                                                 // set once answered: then a left swipe is the Next button
   const next = () => ans ? done(c, ans) : skipCard(c);
   S.cur = { grade: g => g === 3 ? next() : undoLast() };
-  const m = $('#cc .mcs'); let x0 = null, y0 = 0, dx = 0, swiped = false;
-  m.onpointerdown = e => { x0 = e.clientX; y0 = e.clientY; dx = 0; swiped = false; m.style.transition = 'none'; };
-  m.onpointermove = e => { if (x0 === null) return; dx = e.clientX - x0; if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(e.clientY - y0)) { swiped = true; m.style.transform = `translate3d(${dx}px,0,0)`; } };
+  // the whole card takes the swipe (on an iPad most of it is empty space below the choices); only the question moves
+  const cc = $('#cc'), m = cc.querySelector('.mcs'); let x0 = null, y0 = 0, dx = 0, swiped = false;
+  cc.classList.add('mcsw');
+  cc.onpointerdown = e => { x0 = e.clientX; y0 = e.clientY; dx = 0; swiped = false; m.style.transition = 'none'; };
+  cc.onpointermove = e => { if (x0 === null) return; dx = e.clientX - x0; if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(e.clientY - y0)) { swiped = true; m.style.transform = `translate3d(${dx}px,0,0)`; } };
   const end = () => {
     if (x0 === null) return; x0 = null; m.style.transition = 'transform .15s ease-out';
     if (swiped && dx < -60) next(); else if (swiped && dx > 60 && S.hist?.length) undoLast(); else m.style.transform = '';
   };
-  m.onpointerup = end; m.onpointercancel = end;
+  cc.onpointerup = end; cc.onpointercancel = end;
   $('#cc').querySelectorAll('.choice').forEach(b => b.onclick = () => {
     if (swiped) return;
     const i = +b.dataset.i, ok = i === c.correct; ans = ok ? 3 : 1;
@@ -547,7 +550,7 @@ function viewSettings() {
     <div class="card"><b>Sync between devices</b><p class="note" id="syn"></p><div id="synui"></div></div>
     <div class="card"><b>Duplicates</b><p class="note" id="dupn"></p><div class="row"><button id="dupgo">Review similar cards</button></div></div>
     <div class="card"><b>Your edits</b><p class="note" id="edits"></p></div>
-    <div class="card"><b>Progress</b><p class="note">${events.length} events · device ${esc(settings.device)}. Export from one device, import on another. Merging is safe to repeat.</p>
+    <div class="card"><b>Progress</b><p class="note">${events.length} events · device ${esc(settings.device)} · app ${APP}. Export from one device, import on another. Merging is safe to repeat.</p>
     <div class="row"><button id="ex" class="pri">Export / share</button></div>
     <label for="pf">Import progress file</label><input type="file" id="pf" accept=".json,application/json"><p class="note" id="msg"></p></div>
     <div class="card"><span class="muted" id="per"></span></div>`;
