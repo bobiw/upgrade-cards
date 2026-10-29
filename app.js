@@ -818,8 +818,31 @@ function libPrompt() {
 // ---------- listen: audiobook chapters from the private library repo (audio/index.json, one .m4a per chapter) ----------
 // Nothing downloads by itself: the small index is checked at most once a day (or on "Check"), and a chapter whose audio
 // changed is only marked "update available". B taps to download each chapter.
-let player = null, playing = null, nowSec = -1;
+// Downloads queue up and run one at a time; "Up next" is B's own play queue, played before the rest of the book.
+let player = null, playing = null, nowSec = -1, dlq = [], dlOn = null, dlErr = '', listenDraw = null;
 const LS = () => (settings.listen ||= { pos: {}, rate: 1, have: {} });
+const chOf = (ix, f) => { const b = ix?.books.find(b => b.chapters.some(c => c.file === f)); return b && { ...b.chapters.find(c => c.file === f), book: b.title }; };
+const redrawListen = () => { if (tab === 'listen') listenDraw?.(); };
+async function dlRun() {                               // works through dlq; the Listen page can be redrawn or left meanwhile
+  if (dlRun.busy) return; dlRun.busy = true;          // set before the first await, so quick taps don't start parallel runs
+  const L = LS(), ix = await kvGet('audindex');
+  while (dlq.length) {
+    const f = dlOn = dlq.shift(), c = chOf(ix, f); redrawListen(); if (!c) continue;
+    try {
+      const buf = await libBytes(f, (g, t) => { const pr = $('#aprog'); if (pr && tab === 'listen') pr.textContent = `${c.title}: ${(g / 1048576).toFixed(1)} of ${((t || c.size) / 1048576).toFixed(1)} MB${dlq.length ? ` · ${dlq.length} more queued` : ''}`; });
+      if (await sha256(buf) !== c.sha) throw new Error('download did not match its checksum; try again');
+      await kvSet('aud:' + f, buf); L.have[f] = c.sha; await kvSet('settings', settings);
+    } catch (e) { dlErr = c.title + ': ' + e.message; }
+  }
+  dlOn = null; dlRun.busy = false; redrawListen();
+}
+async function audNext() {                             // chapter ended: first downloaded item in Up next, else the book's next chapter
+  const L = LS(), ix = await kvGet('audindex'), q = L.queue ||= [];
+  const i = q.findIndex(f => L.have[f]);
+  if (i >= 0) { const f = q.splice(i, 1)[0]; await kvSet('settings', settings); await audPlay(chOf(ix, f)); }
+  else if (L.cont !== false) await audChapter(1);
+  redrawListen();
+}
 const mins = s => { s = Math.round(s / 60); return s >= 60 ? `${Math.floor(s / 60)} h ${s % 60} min` : `${s} min`; };
 const clock = s => { s = Math.max(0, Math.floor(s || 0)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = String(s % 60).padStart(2, '0'); return h ? `${h}:${String(m).padStart(2, '0')}:${x}` : `${m}:${x}`; };
 async function audIndex(check) {
@@ -841,7 +864,7 @@ function audEl() {
     paintNow();
   };
   player.onplay = player.onpause = () => { kvSet('settings', settings); paintNow(); };
-  player.onended = () => { LS().pos[playing.file] = 0; kvSet('settings', settings); audChapter(1); };
+  player.onended = () => { LS().pos[playing.file] = 0; kvSet('settings', settings); audNext(); };
   const ms = navigator.mediaSession, on = (a, f) => { try { ms.setActionHandler(a, f); } catch (_) {} };
   if (ms) { on('play', () => player.play()); on('pause', () => player.pause()); on('seekbackward', () => { player.currentTime -= 15; }); on('seekforward', () => { player.currentTime += 30; }); on('previoustrack', () => audSection(-1)); on('nexttrack', () => audSection(1)); }
   return player;
@@ -881,42 +904,45 @@ async function viewListen() {
   const L = LS(), main = $('#main');
   if (!settings.lib?.repo) { main.innerHTML = `<div class="card"><h2>Listen</h2><p class="note">Turn on the library in Settings first. The audio comes from the same private repo as the deck and the manuals.</p></div>`; return; }
   let ix = await audIndex(false);
-  const draw = async () => {
-    const have = L.have, rows = [];
+  const draw = listenDraw = async () => {
+    const have = L.have, rows = [], q = L.queue ||= [];
     let used = 0, upd = 0;
     for (const b of ix?.books || []) {
       rows.push(`<div class="card"><h2>${esc(b.title)}</h2>`);
       for (const c of b.chapters) {
-        const got = have[c.file], stale = got && got !== c.sha, pos = L.pos[c.file];
+        const got = have[c.file], stale = got && got !== c.sha, pos = L.pos[c.file], qi = q.indexOf(c.file), f = esc(c.file);
+        const dl = dlOn === c.file ? `<button class="small" disabled>Downloading…</button>` : dlq.includes(c.file) ? `<button class="small" data-aq="${f}" title="Take off the download queue">Queued ✕</button>` : '';
+        const nx = qi < 0 && playing?.file !== c.file ? `<button class="small" data-an="${f}" title="Play next" aria-label="Add to Up next">+ Next</button>` : '';
         if (got) used += c.size; if (stale) upd++;
-        rows.push(`<div class="arow"><b>${esc(c.title)}</b><small>${mins(c.dur)} · ${(c.size / 1048576).toFixed(0)} MB${pos > 5 ? ' · at ' + clock(pos) : ''}${stale ? '<span class="upd">● New version</span>' : ''}</small><span class="abtn">
-          ${got ? `<button class="small pri" data-ap="${esc(c.file)}" aria-label="Play">▶︎</button>${stale ? `<button class="small updb" data-ad="${esc(c.file)}">Update</button>` : ''}<button class="small" data-ax="${esc(c.file)}" title="Remove from this device" aria-label="Remove from this device">✕</button>` : `<button class="small" data-ad="${esc(c.file)}">Download</button>`}</span></div>`);
+        rows.push(`<div class="arow"><b>${esc(c.title)}</b><small>${mins(c.dur)} · ${(c.size / 1048576).toFixed(0)} MB${pos > 5 ? ' · at ' + clock(pos) : ''}${qi >= 0 ? ' · Up next ' + (qi + 1) : ''}${stale ? '<span class="upd">● New version</span>' : ''}</small><span class="abtn">
+          ${got ? `<button class="small pri" data-ap="${f}" aria-label="Play">▶︎</button>${nx}${dl || (stale ? `<button class="small updb" data-ad="${f}">Update</button>` : '')}<button class="small" data-ax="${f}" title="Remove from this device" aria-label="Remove from this device">✕</button>` : `${nx}${dl || `<button class="small" data-ad="${f}">Download</button>`}`}</span></div>`);
       }
       rows.push('</div>');
     }
     const now = playing ? `<div class="card" id="now"><div class="nt"></div><input type="range" min="0" max="1000" value="0" id="nps" style="width:100%">
       <div class="nc note"></div><div class="row"><button id="npb" title="Previous section">⏮</button><button id="np15">−15</button><button class="pri" id="npp">▶︎</button><button id="np30">+30</button><button id="npn" title="Next section">⏭</button></div>
       <div class="row" style="margin-top:8px"><select id="nprate">${[1, 1.25, 1.5, 1.75, 2].map(r => `<option value="${r}" ${r == (L.rate || 1) ? 'selected' : ''}>${r}×</option>`).join('')}</select></div>
+      <label class="note" style="display:block;margin-top:8px"><input type="checkbox" id="npcont" ${L.cont !== false ? 'checked' : ''}> Keep playing: when Up next is empty, go on to the book's next chapter</label>
       <details style="margin-top:8px"><summary>Sections (${playing.sections?.length || 0})</summary>${(playing.sections || []).map((x, i) => `<button class="small sec" data-st="${x.t}">${clock(x.t)} ${esc(x.title)}</button>`).join('')}</details></div>` : '';
-    main.innerHTML = `${now}<div class="card"><h2>Listen</h2><p class="note">${ix ? `${(used / 1048576).toFixed(0)} MB on this device${upd ? ` · ${upd} chapter${upd > 1 ? 's' : ''} out of date` : ''}. Audio only downloads when you tap.` : 'No audio list yet. Tap Check (needs internet; a few KB).'}${L.checked ? '<br>Checked ' + new Date(L.checked).toLocaleString() : ''}${L.msg ? '<br>' + esc(L.msg) : ''}</p><div class="row"><button id="achk">Check for updates</button></div><div class="prog" id="aprog"></div></div>${rows.join('')}`;
+    const upn = playing || q.length ? `<div class="card"><h2>Up next</h2>${q.length ? q.map((x, i) => { const c = chOf(ix, x); return `<div class="arow"><b>${i + 1}. ${esc(c?.title || x)}</b><small>${esc(c?.book || '')}${have[x] ? '' : dlOn === x || dlq.includes(x) ? ' · downloading' : ' · not downloaded, skipped until it is'}</small><span class="abtn">${i ? `<button class="small" data-qu="${i}" aria-label="Move up">↑</button>` : ''}<button class="small" data-qx="${i}" aria-label="Remove from Up next">✕</button></span></div>`; }).join('') + '<div class="row" style="margin-top:8px"><button class="small" id="qclr">Clear</button></div>' : `<p class="note">Empty. Tap + Next on a chapter to play it after this one.</p>`}</div>` : '';
+    main.innerHTML = `${now}${upn}<div class="card"><h2>Listen</h2><p class="note">${ix ? `${(used / 1048576).toFixed(0)} MB on this device${upd ? ` · ${upd} chapter${upd > 1 ? 's' : ''} out of date` : ''}. Audio only downloads when you tap.` : 'No audio list yet. Tap Check (needs internet; a few KB).'}${L.checked ? '<br>Checked ' + new Date(L.checked).toLocaleString() : ''}${L.msg ? '<br>' + esc(L.msg) : ''}</p><div class="row"><button id="achk">Check for updates</button></div><div class="prog" id="aprog">${esc(dlErr)}</div></div>${rows.join('')}`;
     $('#achk').onclick = async () => { $('#achk').textContent = 'Checking…'; ix = await audIndex(true); draw(); };
-    main.querySelectorAll('[data-ap]').forEach(b => b.onclick = () => { const f = b.dataset.ap, bk = ix.books.find(x => x.chapters.some(c => c.file === f)); audPlay({ ...bk.chapters.find(c => c.file === f), book: bk.title }).then(draw); });
+    main.querySelectorAll('[data-ap]').forEach(b => b.onclick = () => { const f = b.dataset.ap; if (q.includes(f)) q.splice(q.indexOf(f), 1); audPlay(chOf(ix, f)).then(draw); });
+    const qSave = () => { kvSet('settings', settings); draw(); };
+    main.querySelectorAll('[data-an]').forEach(b => b.onclick = () => { const f = b.dataset.an; q.push(f); if (!have[f] && dlOn !== f && !dlq.includes(f)) { dlq.push(f); dlRun(); } qSave(); });
+    main.querySelectorAll('[data-qu]').forEach(b => b.onclick = () => { const i = +b.dataset.qu; q.splice(i - 1, 0, q.splice(i, 1)[0]); qSave(); });
+    main.querySelectorAll('[data-qx]').forEach(b => b.onclick = () => { q.splice(+b.dataset.qx, 1); qSave(); });
+    main.querySelectorAll('[data-aq]').forEach(b => b.onclick = () => { dlq.splice(dlq.indexOf(b.dataset.aq), 1); draw(); });
+    if ($('#qclr')) $('#qclr').onclick = () => { q.length = 0; qSave(); };
     main.querySelectorAll('[data-ax]').forEach(b => b.onclick = async () => { const f = b.dataset.ax; if (playing?.file === f) { player.pause(); playing = null; } await kvSet('aud:' + f, null); delete L.have[f]; await kvSet('settings', settings); draw(); });
-    main.querySelectorAll('[data-ad]').forEach(b => b.onclick = async () => {
-      const f = b.dataset.ad, c = ix.books.flatMap(x => x.chapters).find(c => c.file === f), pr = $('#aprog');
-      main.querySelectorAll('button').forEach(x => x.disabled = true);
-      try {
-        const buf = await libBytes(f, (g, t) => { pr.textContent = `${c.title}: ${(g / 1048576).toFixed(1)} of ${((t || c.size) / 1048576).toFixed(1)} MB`; });
-        if (await sha256(buf) !== c.sha) throw new Error('download did not match its checksum; try again');
-        await kvSet('aud:' + f, buf); L.have[f] = c.sha; await kvSet('settings', settings); draw();
-      } catch (e) { pr.textContent = c.title + ': ' + e.message; main.querySelectorAll('button').forEach(x => x.disabled = false); }
-    });
+    main.querySelectorAll('[data-ad]').forEach(b => b.onclick = () => { dlErr = ''; dlq.push(b.dataset.ad); dlRun(); draw(); });
     if (playing) {
       paintNow();
       $('#npp').onclick = () => player.paused ? player.play() : player.pause();
       $('#np15').onclick = () => { player.currentTime -= 15; }; $('#np30').onclick = () => { player.currentTime += 30; };
       $('#npb').onclick = () => audSection(-1); $('#npn').onclick = () => audSection(1);
       $('#nps').oninput = e => { player.currentTime = e.target.value / 1000 * (player.duration || playing.dur); };
+      $('#npcont').onchange = e => { L.cont = e.target.checked; kvSet('settings', settings); };
       $('#nprate').onchange = e => { L.rate = +e.target.value; player.playbackRate = L.rate; kvSet('settings', settings); };
       main.querySelectorAll('[data-st]').forEach(b => b.onclick = () => { player.currentTime = +b.dataset.st; if (player.paused) player.play(); });
     }
