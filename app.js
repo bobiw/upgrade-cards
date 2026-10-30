@@ -16,7 +16,7 @@ const kvSet = (k, v) => new Promise((res, rej) => { const t = idb.transaction('k
 
 let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '', deck: 'mine', hideDups: true, refDark: 'auto' };
 let S = null; // study session
-const APP = 'v17';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
+const APP = 'v18';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
 // paused sessions survive closing the app: { study: {...}, quiz: { topic: {...} } }, saved after every answer
 let sessions = { study: null, quiz: {} };
 const REDO = ' · missed';                       // a missed-only drill is saved beside its quiz
@@ -69,7 +69,7 @@ function replay() {
 const endOfToday = () => { const d = new Date(); d.setHours(23, 59, 59, 999); return d.getTime(); };
 const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString();
 const deckOf = c => c.deck || (c.id.startsWith('raw-') ? 'mine' : 'claude');
-const DECKS = [['mine', 'My cards'], ['claude', "Claude's cards"], ['all', 'All']];
+const DECKS = [['mine', 'My cards'], ['claude', "Claude's cards"], ['kvsg', 'KV Guide 2025'], ['all', 'All']];
 let _dk = -1, _dset = new Set(), _spell = {}, _undone = new Set(), _dupc = {}, _sugg = {}, _ack = {};
 function derive() {
   if (_dk === events.length) return; _dk = events.length;
