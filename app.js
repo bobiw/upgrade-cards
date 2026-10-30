@@ -16,7 +16,7 @@ const kvSet = (k, v) => new Promise((res, rej) => { const t = idb.transaction('k
 
 let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '', deck: 'mine', hideDups: true, refDark: 'auto' };
 let S = null; // study session
-const APP = 'v18';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
+const APP = 'v19';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
 // paused sessions survive closing the app: { study: {...}, quiz: { topic: {...} } }, saved after every answer
 let sessions = { study: null, quiz: {} };
 const REDO = ' · missed';                       // a missed-only drill is saved beside its quiz
@@ -272,18 +272,37 @@ const gradeBtns = sug => [[1, 'Again'], [2, 'Hard'], [3, 'Good'], [4, 'Easy']]
   .map(([g, l]) => `<button class="g${g}${sug === g ? ' sug' : ''}" data-g="${g}">${l}</button>`).join('');
 
 // ---------- review quizzes: the company review tests, in question order, scored ----------
-// every topic of area 'key' is a quiz; the four company reviews first, then the rest by name
+// every topic of area 'key', and every KV Guide 2025 section, is a quiz; shown in groups, today's first
 const QUIZ_ORDER = ['FOM Ch 4 review', 'FOM Ch 5 review', 'FOM Ch 10 review', 'Upgrade Weather review'];
-const quizLabel = t => t.replace(/ review$/, '').replace(/^Upgrade /, '');
-const quizTopics = () => [...new Set(deck.cards.filter(c => c.area === 'key').map(c => c.topic))].sort((a, b) => ((QUIZ_ORDER.indexOf(a) + 1 || 99) - (QUIZ_ORDER.indexOf(b) + 1 || 99)) || a.localeCompare(b, undefined, { numeric: true }));
+const quizLabel = t => t.replace(/ review$/, '').replace(/^Upgrade /, '').replace(/^KV SG 2025: /, '');
+const isQuiz = c => c.area === 'key' || deckOf(c) === 'kvsg';
+const firstId = t => deck.cards.find(c => c.topic === t)?.id || '';
+const quizTopics = () => [...new Set(deck.cards.filter(isQuiz).map(c => c.topic))].sort((a, b) => ((QUIZ_ORDER.indexOf(a) + 1 || 99) - (QUIZ_ORDER.indexOf(b) + 1 || 99)) || firstId(a).localeCompare(firstId(b), undefined, { numeric: true }));
+// the daily lessons (0-daily-lessons/README.md): which quizzes go with each day's topic
+const SG = t => 'KV SG 2025: ' + t;
+const TODAY = {
+  '2026-10-30': ['Day 1: Electrical, APU, Fire, FOM 4', [SG('Electrical'), SG('Auxiliary Power Unit (APU)'), SG('Fire Protection'), 'FOM Ch 4 review']],
+  '2026-10-31': ['Day 2: Fuel, Hydraulics, Flight Controls', [SG('Fuel'), SG('Hydraulics'), SG('Flight Control/Stall Protection')]],
+  '2026-11-01': ['Day 3: Bleed, Pressurization, Ice', [SG('Pneumatics'), SG('Air Conditioning/Environmental Control Systems'), SG('Pressurization'), SG('Ice and Rain Protection'), SG('Oxygen')]],
+  '2026-11-02': ['Day 4: Engines, Gear, AFCS, FOM 5', [SG('Engines/Powerplants'), SG('Landing Gear'), SG('Brakes'), SG('Nose Wheel Steering'), SG('Autoflight Control System (AFCS)'), 'FOM Ch 5 review']],
+  '2026-11-03': ['Day 5: Mock KV', ['Limitations & IAI test', SG('Limitations'), SG('Immediate Action Items')]],
+  '2026-11-04': ['Day 6: KV morning', [SG('Limitations'), SG('Immediate Action Items')]],
+};
+const quizGroup = t => deck.cards.find(c => c.topic === t && deckOf(c) === 'kvsg') ? 'KV Guide 2025, by system' : /homework/i.test(t) ? 'Homework' : /^KV:/.test(t) ? 'KV prep' : 'Company tests and reviews';
+const GROUPS = ['KV Guide 2025, by system', 'Company tests and reviews', 'KV prep', 'Homework'];
 const noScore = c => c.noscore || /^(Not answerable|I don't know)/.test(c.a || '');
 const quizCards = t => deck.cards.filter(c => c.topic === t && !isDropped(c.id)).sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
 const quizState = t => ({ quiz: t, qn: 0, qok: 0, miss: [], retry: [], round: 1, roundStart: 0 });
 function startRedo(t, cards) { if (!cards.length) return; delete sessions.quiz[t + REDO]; S = { queue: mix(cards, replay()), i: 0, shown: false, t0: Date.now(), total: cards.length, done: 0, rl: {}, ...quizState(t), redo: true }; viewStudy(); }
 function quizBox() {
-  const q = quizTopics().map(t => [t, quizLabel(t), quizCards(t).length]).filter(x => x[2]);
+  const all = quizTopics().map(t => [t, quizLabel(t), quizCards(t).length]).filter(x => x[2]);
+  const q = all.filter(([t]) => settings.deck === 'all' || settings.deck === 'mine' || deck.cards.some(c => c.topic === t && deckOf(c) === settings.deck));
   if (!q.length) return '';
-  return `<div class="card" style="margin-top:12px"><div class="q" style="font-size:1.05em">Review quizzes</div><p class="muted">The company tests, in order, with a score at the end.</p><div class="qz">${q.map(([t, l, n]) => { const r = settings.quiz?.[t]; const p = sessions.quiz[t]; return `<button data-quiz="${esc(t)}"${p ? ' class="paused"' : ''}><b>${esc(l)}</b><small>${p ? `▶ resume at ${p.i + 1} of ${p.ids.length}` : `${n} questions${r ? ` · last ${r.ok}/${r.n}` : ''}`}</small></button>`; }).join('')}</div>${q.filter(([t]) => sessions.quiz[t]).map(([t, l]) => `<div class="qrs"><span>${esc(l)} paused at ${sessions.quiz[t].i + 1}</span><button class="small" data-qrestart="${esc(t)}">Start over</button></div>`).join('')}${q.filter(([t]) => sessions.quiz[t + REDO] || settings.quizMiss?.[t]?.length).map(([t, l]) => { const p = sessions.quiz[t + REDO]; return `<div class="qrs"><span>${esc(l)}: ${p ? `missed drill paused at ${p.i + 1} of ${p.ids.length}` : `${settings.quizMiss[t].length} missed last time`}</span><button class="small" data-qredo="${esc(t)}">${p ? 'Resume drill' : 'Redo missed'}</button></div>`; }).join('')}</div>`;
+  const btn = ([t, l, n]) => { const r = settings.quiz?.[t]; const p = sessions.quiz[t]; return `<button data-quiz="${esc(t)}"${p ? ' class="paused"' : ''}><b>${esc(l)}</b><small>${p ? `▶ resume at ${p.i + 1} of ${p.ids.length}` : `${n} questions${r ? ` · last ${r.ok}/${r.n}` : ''}`}</small></button>`; };
+  const d = new Date(), day = TODAY[`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`];
+  const today = day ? day[1].map(t => all.find(x => x[0] === t)).filter(Boolean) : [];
+  const grp = (title, list, open) => list.length ? `<details class="qg"${open ? ' open' : ''}><summary>${esc(title)} <small>${list.length}</small></summary><div class="qz">${list.map(btn).join('')}</div></details>` : '';
+  return `<div class="card" style="margin-top:12px"><div class="q" style="font-size:1.05em">Quizzes</div><p class="muted">In question order, with a score at the end.</p>${today.length ? `<div class="qtoday"><b>Today · ${esc(day[0])}</b><div class="qz">${today.map(btn).join('')}</div></div>` : ''}${GROUPS.map(g => { const l = q.filter(([t]) => quizGroup(t) === g); return grp(g, l, l.some(([t]) => sessions.quiz[t])); }).join('')}${q.filter(([t]) => sessions.quiz[t]).map(([t, l]) => `<div class="qrs"><span>${esc(l)} paused at ${sessions.quiz[t].i + 1}</span><button class="small" data-qrestart="${esc(t)}">Start over</button></div>`).join('')}${q.filter(([t]) => sessions.quiz[t + REDO] || settings.quizMiss?.[t]?.length).map(([t, l]) => { const p = sessions.quiz[t + REDO]; return `<div class="qrs"><span>${esc(l)}: ${p ? `missed drill paused at ${p.i + 1} of ${p.ids.length}` : `${settings.quizMiss[t].length} missed last time`}</span><button class="small" data-qredo="${esc(t)}">${p ? 'Resume drill' : 'Redo missed'}</button></div>`; }).join('')}</div>`;
 }
 
 // ---------- study ----------
