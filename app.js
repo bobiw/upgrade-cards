@@ -16,7 +16,7 @@ const kvSet = (k, v) => new Promise((res, rej) => { const t = idb.transaction('k
 
 let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '', deck: 'mine', hideDups: true, refDark: 'auto' };
 let S = null; // study session
-const APP = 'v23';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
+const APP = 'v24';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
 // paused sessions survive closing the app: { study: {...}, quiz: { topic: {...} } }, saved after every answer
 let sessions = { study: null, quiz: {} };
 const REDO = ' · missed';                       // a missed-only drill is saved beside its quiz
@@ -507,8 +507,11 @@ function rMc(c) {
 // fill in the blank: the memory-item cloze cards, one box per blank, typed and checked
 const isBlank = c => c.type === 'cloze' && c.topic === BLANKS;
 const normBlank = s => s.toLowerCase().replace(/[−–]/g, '-').replace(/&/g, 'and').replace(/°\s*[cf]?/g, '').replace(/(\d)\s*(?:c|m|mach)\b/g, '$1')
-  .replace(/(?<![a-z])(?:ft|feet|kt|kts|knots?|kias|min|mins|minutes?|lbs?|psi|agl|sec|secs|seconds?|hours?|hr)\b\.?/g, '').replace(/\b0\./g, '.').replace(/[\s,()'"…]/g, '').replace(/\.$/, '');
-const blankOk = (got, a) => { const g = normBlank(got); if (!g) return false; const alts = [a, a.replace(/\(.*?\)/g, ''), ...(a.match(/\((.*?)\)/g) || []).map(x => x.slice(1, -1))]; return alts.some(x => normBlank(x) === g); };
+  .replace(/(?<![a-z])(?:ft|feet|kt|kts|knots?|kias|min|mins|minutes?|lbs?|psi|agl|sec|secs|seconds?|hours?|hr)\b\.?/g, '').replace(/\b0\./g, '.').replace(/-(?!\d)/g, '').replace(/[\s,()'"…]/g, '').replace(/\.$/, '');
+// it's an oral exam: spelling and hyphens don't count, but every digit must be right
+const lev = (s, t) => { let p = [...Array(t.length + 1).keys()]; for (let i = 1; i <= s.length; i++) { const c = [i]; for (let j = 1; j <= t.length; j++) c[j] = Math.min(p[j] + 1, c[j - 1] + 1, p[j - 1] + (s[i - 1] === t[j - 1] ? 0 : 1)); p = c; } return p[t.length]; };
+const near = (g, x) => g === x || (/[a-z]/.test(x) && g.replace(/\D/g, '') === x.replace(/\D/g, '') && lev(g, x) <= Math.max(1, Math.floor(x.length / 5)));
+const blankOk = (got, a) => { const g = normBlank(got); if (!g) return false; const alts = [a, a.replace(/\(.*?\)/g, ''), ...(a.match(/\((.*?)\)/g) || []).map(x => x.slice(1, -1))]; return alts.some(x => near(g, normBlank(x))); };
 function rBlank(c) {
   const ans = [...c.q.matchAll(/\{\{c\d+::(.*?)\}\}/g)].map(m => m[1]); let k = 0;
   const html = esc(c.q).replace(/\{\{c\d+::(.*?)\}\}/g, (_, a) => `<input class="bk" data-k="${k++}" style="width:${Math.min(16, Math.max(2.5, a.length * .55 + .5))}em" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="next">`).replace(/\n/g, '<br>');   // lists: one item per line
