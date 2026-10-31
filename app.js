@@ -16,7 +16,7 @@ const kvSet = (k, v) => new Promise((res, rej) => { const t = idb.transaction('k
 
 let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '', deck: 'mine', hideDups: true, refDark: 'auto' };
 let S = null; // study session
-const APP = 'v24';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
+const APP = 'v25';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
 // paused sessions survive closing the app: { study: {...}, quiz: { topic: {...} } }, saved after every answer
 let sessions = { study: null, quiz: {} };
 const REDO = ' · missed';                       // a missed-only drill is saved beside its quiz
@@ -984,7 +984,8 @@ function paintNow() {
   const el = $('#now'); if (!el || !playing) return;
   const s = playing.sections?.[secAt(playing, player.currentTime)];
   el.querySelector('.nt').textContent = playing.title + (s && s.title !== playing.title ? ' – ' + s.title : '');
-  el.querySelector('.nc').textContent = `${clock(player.currentTime)} / ${clock(player.duration || playing.dur)}`;
+  const r = LS().rate || 1;                            // times shown at the playing speed: a 60 min chapter at 1.5× reads 40 min
+  el.querySelector('.nc').textContent = `${clock(player.currentTime / r)} / ${clock((player.duration || playing.dur) / r)}${r !== 1 ? ` at ${r}×` : ''}`;
   el.querySelector('#npp').textContent = player.paused ? '▶︎' : '⏸';
   el.querySelector('input[type=range]').value = player.currentTime / (player.duration || playing.dur) * 1000 || 0;
 }
@@ -1002,7 +1003,7 @@ async function viewListen() {
         const dl = dlOn === c.file ? `<button class="small" disabled>Downloading…</button>` : dlq.includes(c.file) ? `<button class="small" data-aq="${f}" title="Take off the download queue">Queued ✕</button>` : '';
         const nx = qi < 0 && playing?.file !== c.file ? `<button class="small" data-an="${f}" title="Play next" aria-label="Add to Up next">+ Next</button>` : '';
         if (got) used += c.size; if (stale) upd++;
-        rows.push(`<div class="arow"><b>${esc(c.title)}</b><small>${mins(c.dur)} · ${(c.size / 1048576).toFixed(0)} MB${pos > 5 ? ' · at ' + clock(pos) : ''}${qi >= 0 ? ' · Up next ' + (qi + 1) : ''}${stale ? '<span class="upd">● New version</span>' : ''}</small><span class="abtn">
+        rows.push(`<div class="arow"><b>${esc(c.title)}</b><small>${mins(c.dur / (L.rate || 1))}${(L.rate || 1) !== 1 ? ` at ${L.rate}×` : ''} · ${(c.size / 1048576).toFixed(0)} MB${pos > 5 ? ' · at ' + clock(pos / (L.rate || 1)) : ''}${qi >= 0 ? ' · Up next ' + (qi + 1) : ''}${stale ? '<span class="upd">● New version</span>' : ''}</small><span class="abtn">
           ${got ? `<button class="small pri" data-ap="${f}" aria-label="Play">▶︎</button>${nx}${dl || (stale ? `<button class="small updb" data-ad="${f}">Update</button>` : '')}<button class="small" data-ax="${f}" title="Remove from this device" aria-label="Remove from this device">✕</button>` : `${nx}${dl || `<button class="small" data-ad="${f}">Download</button>`}`}</span></div>`);
       }
       rows.push('</div>');
@@ -1011,7 +1012,7 @@ async function viewListen() {
       <div class="nc note"></div><div class="row"><button id="npb" title="Previous section">⏮</button><button id="np15">−15</button><button class="pri" id="npp">▶︎</button><button id="np30">+30</button><button id="npn" title="Next section">⏭</button></div>
       <div class="row" style="margin-top:8px"><select id="nprate">${[1, 1.25, 1.5, 1.75, 2].map(r => `<option value="${r}" ${r == (L.rate || 1) ? 'selected' : ''}>${r}×</option>`).join('')}</select></div>
       <label class="note" style="display:block;margin-top:8px"><input type="checkbox" id="npcont" ${L.cont !== false ? 'checked' : ''}> Keep playing: when Up next is empty, go on to the book's next chapter</label>
-      <details style="margin-top:8px"><summary>Sections (${playing.sections?.length || 0})</summary>${(playing.sections || []).map((x, i) => `<button class="small sec" data-st="${x.t}">${clock(x.t)} ${esc(x.title)}</button>`).join('')}</details></div>` : '';
+      <details style="margin-top:8px"><summary>Sections (${playing.sections?.length || 0})</summary>${(playing.sections || []).map((x, i) => `<button class="small sec" data-st="${x.t}">${clock(x.t / (L.rate || 1))} ${esc(x.title)}</button>`).join('')}</details></div>` : '';
     const upn = playing || q.length ? `<div class="card"><h2>Up next</h2>${q.length ? q.map((x, i) => { const c = chOf(ix, x); return `<div class="arow"><b>${i + 1}. ${esc(c?.title || x)}</b><small>${esc(c?.book || '')}${have[x] ? '' : dlOn === x || dlq.includes(x) ? ' · downloading' : ' · not downloaded, skipped until it is'}</small><span class="abtn">${i ? `<button class="small" data-qu="${i}" aria-label="Move up">↑</button>` : ''}<button class="small" data-qx="${i}" aria-label="Remove from Up next">✕</button></span></div>`; }).join('') + '<div class="row" style="margin-top:8px"><button class="small" id="qclr">Clear</button></div>' : `<p class="note">Empty. Tap + Next on a chapter to play it after this one.</p>`}</div>` : '';
     main.innerHTML = `${now}${upn}<div class="card"><h2>Listen</h2><p class="note">${ix ? `${(used / 1048576).toFixed(0)} MB on this device${upd ? ` · ${upd} chapter${upd > 1 ? 's' : ''} out of date` : ''}. Audio only downloads when you tap.` : 'No audio list yet. Tap Check (needs internet; a few KB).'}${L.checked ? '<br>Checked ' + new Date(L.checked).toLocaleString() : ''}${L.msg ? '<br>' + esc(L.msg) : ''}</p><div class="row"><button id="achk">Check for updates</button></div><div class="prog" id="aprog">${esc(dlErr)}</div></div>${rows.join('')}`;
     $('#achk').onclick = async () => { $('#achk').textContent = 'Checking…'; ix = await audIndex(true); draw(); };
@@ -1031,7 +1032,7 @@ async function viewListen() {
       $('#npb').onclick = () => audSection(-1); $('#npn').onclick = () => audSection(1);
       $('#nps').oninput = e => { player.currentTime = e.target.value / 1000 * (player.duration || playing.dur); };
       $('#npcont').onchange = e => { L.cont = e.target.checked; kvSet('settings', settings); };
-      $('#nprate').onchange = e => { L.rate = +e.target.value; player.playbackRate = L.rate; kvSet('settings', settings); };
+      $('#nprate').onchange = e => { L.rate = +e.target.value; player.playbackRate = L.rate; kvSet('settings', settings); draw(); };
       main.querySelectorAll('[data-st]').forEach(b => b.onclick = () => { player.currentTime = +b.dataset.st; if (player.paused) player.play(); });
     }
   };
