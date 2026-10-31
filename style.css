@@ -202,7 +202,9 @@ main.study #ctl{flex:none}
 #now .row>button{min-width:0;padding-left:6px;padding-right:6px}
 .mcsw,.mcsw *{touch-action:pan-y}.mcs,.mcs button{user-select:none;-webkit-user-select:none}
 @keyframes mcin{from{opacity:0;transform:translate3d(var(--x),0,0)}}#cc.mcin{animation:mcin .2s ease-out}#cc.mcsw{will-change:transform}
-.bkq{line-height:2.1}
-.bk{font:inherit;font-weight:700;border:0;border-bottom:2px solid var(--line);background:var(--blank);color:var(--fg);border-radius:5px 5px 0 0;padding:1px 6px;margin:0 2px;max-width:100%}
-.bk:focus{outline:2px solid var(--line);outline-offset:1px}.bk.ok{border-bottom-color:var(--ok);color:var(--ok)}.bk.no{border-bottom-color:var(--bad);color:var(--bad);text-decoration:line-through}
-.bkfix{margin-left:4px}
+.bkq{line-height:2.5}
+.bk{font:inherit;font-weight:600;text-align:center;border:1.5px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;padding:3px 8px;margin:2px 3px;min-width:3.5em;max-width:100%;box-sizing:content-box}
+.bk:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 3px color-mix(in srgb,var(--acc) 25%,transparent)}
+.bk.ok{border-color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,var(--card));color:var(--ok)}
+.bk.no{border-color:var(--bad);background:color-mix(in srgb,var(--bad) 10%,var(--card));color:var(--bad);text-decoration:line-through}
+.bkfix{display:inline-block;max-width:100%;line-height:1.4;margin-left:2px;border-radius:8px;padding:3px 8px;color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,var(--card));border:1.5px solid var(--ok)}

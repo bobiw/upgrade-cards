@@ -16,7 +16,7 @@ const kvSet = (k, v) => new Promise((res, rej) => { const t = idb.transaction('k
 
 let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '', deck: 'mine', hideDups: true, refDark: 'auto' };
 let S = null; // study session
-const APP = 'v20';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
+const APP = 'v21';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
 // paused sessions survive closing the app: { study: {...}, quiz: { topic: {...} } }, saved after every answer
 let sessions = { study: null, quiz: {} };
 const REDO = ' · missed';                       // a missed-only drill is saved beside its quiz
@@ -507,24 +507,25 @@ function rMc(c) {
 // fill in the blank: the memory-item cloze cards, one box per blank, typed and checked
 const isBlank = c => c.type === 'cloze' && c.topic === BLANKS;
 const normBlank = s => s.toLowerCase().replace(/[−–]/g, '-').replace(/&/g, 'and').replace(/°\s*[cf]?/g, '').replace(/(\d)\s*(?:c|m|mach)\b/g, '$1')
-  .replace(/\b(?:ft|feet|kt|kts|knots|kias|min|mins|minutes?|lbs?|psi|agl|sec|secs|seconds?|hours?|hr)\b\.?/g, '').replace(/\b0\./g, '.').replace(/[\s,()'"…]/g, '').replace(/\.$/, '');
+  .replace(/(?<![a-z])(?:ft|feet|kt|kts|knots?|kias|min|mins|minutes?|lbs?|psi|agl|sec|secs|seconds?|hours?|hr)\b\.?/g, '').replace(/\b0\./g, '.').replace(/[\s,()'"…]/g, '').replace(/\.$/, '');
 const blankOk = (got, a) => { const g = normBlank(got); if (!g) return false; const alts = [a, a.replace(/\(.*?\)/g, ''), ...(a.match(/\((.*?)\)/g) || []).map(x => x.slice(1, -1))]; return alts.some(x => normBlank(x) === g); };
 function rBlank(c) {
   const ans = [...c.q.matchAll(/\{\{c\d+::(.*?)\}\}/g)].map(m => m[1]); let k = 0;
   const html = esc(c.q).replace(/\{\{c\d+::(.*?)\}\}/g, (_, a) => `<input class="bk" data-k="${k++}" style="width:${Math.min(16, Math.max(4, a.length * .62 + 1.5))}em" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="next">`);
   $('#cc').insertAdjacentHTML('beforeend', `<div class="q bkq">${html}</div>`);
   $('#ctl').innerHTML = `<button class="pri" style="width:100%" id="sh">Check</button>`;
-  const ins = [...document.querySelectorAll('#cc .bk')];
+  const ins = [...document.querySelectorAll('#cc .bk')]; let sug = 1;
   const check = () => {
     if (S.shown) return; S.shown = true;
     let bad = 0;
     ins.forEach((x, i) => { const ok = blankOk(x.value, ans[i]); if (!ok) bad++; x.classList.add(ok ? 'ok' : 'no'); x.readOnly = true;
       if (!ok) x.insertAdjacentHTML('afterend', `<span class="blank bkfix">${esc(ans[i])}</span>`); });
-    const sug = bad === 0 ? 3 : bad === 1 && ans.length >= 3 ? 2 : 1;
+    sug = bad === 0 ? 3 : bad === 1 && ans.length >= 3 ? 2 : 1;
     reveal(c, `<div class="a">${bad ? `${ans.length - bad} of ${ans.length} right.` : 'All right.'}</div>`);
     gradePanel(c, sug);
+    $(`#ctl [data-g="${sug}"]`)?.focus({ preventScroll: true });   // Enter again takes the suggested grade, next card
   };
-  ins.forEach((x, i) => x.onkeydown = e => { if (e.key !== 'Enter') return; e.preventDefault(); if (ins[i + 1]) ins[i + 1].focus(); else check(); });
+  ins.forEach((x, i) => x.onkeydown = e => { if (e.key !== 'Enter') return; e.preventDefault(); if (S.shown) done(c, sug); else if (ins[i + 1]) ins[i + 1].focus(); else check(); });
   $('#sh').onclick = check;
   if (ins[0] && matchMedia('(pointer:fine)').matches) ins[0].focus();
 }
