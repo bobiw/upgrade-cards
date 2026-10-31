@@ -202,3 +202,7 @@ main.study #ctl{flex:none}
 #now .row>button{min-width:0;padding-left:6px;padding-right:6px}
 .mcsw,.mcsw *{touch-action:pan-y}.mcs,.mcs button{user-select:none;-webkit-user-select:none}
 @keyframes mcin{from{opacity:0;transform:translate3d(var(--x),0,0)}}#cc.mcin{animation:mcin .2s ease-out}#cc.mcsw{will-change:transform}
+.bkq{line-height:2.1}
+.bk{font:inherit;font-weight:700;border:0;border-bottom:2px solid var(--line);background:var(--blank);color:var(--fg);border-radius:5px 5px 0 0;padding:1px 6px;margin:0 2px;max-width:100%}
+.bk:focus{outline:2px solid var(--line);outline-offset:1px}.bk.ok{border-bottom-color:var(--ok);color:var(--ok)}.bk.no{border-bottom-color:var(--bad);color:var(--bad);text-decoration:line-through}
+.bkfix{margin-left:4px}

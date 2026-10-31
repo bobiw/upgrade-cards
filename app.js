@@ -16,7 +16,7 @@ const kvSet = (k, v) => new Promise((res, rej) => { const t = idb.transaction('k
 
 let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '', deck: 'mine', hideDups: true, refDark: 'auto' };
 let S = null; // study session
-const APP = 'v19';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
+const APP = 'v20';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
 // paused sessions survive closing the app: { study: {...}, quiz: { topic: {...} } }, saved after every answer
 let sessions = { study: null, quiz: {} };
 const REDO = ' · missed';                       // a missed-only drill is saved beside its quiz
@@ -273,22 +273,23 @@ const gradeBtns = sug => [[1, 'Again'], [2, 'Hard'], [3, 'Good'], [4, 'Easy']]
 
 // ---------- review quizzes: the company review tests, in question order, scored ----------
 // every topic of area 'key', and every KV Guide 2025 section, is a quiz; shown in groups, today's first
+const BLANKS = 'Fill in the blank: memory items';      // the memory-item cloze cards, typed into boxes (rBlank)
 const QUIZ_ORDER = ['FOM Ch 4 review', 'FOM Ch 5 review', 'FOM Ch 10 review', 'Upgrade Weather review'];
-const quizLabel = t => t.replace(/ review$/, '').replace(/^Upgrade /, '').replace(/^KV SG 2025: /, '');
-const isQuiz = c => c.area === 'key' || deckOf(c) === 'kvsg';
+const quizLabel = t => t === BLANKS ? 'Limits + IAIs: fill in the blank' : t.replace(/ review$/, '').replace(/^Upgrade /, '').replace(/^KV SG 2025: /, '');
+const isQuiz = c => c.area === 'key' || deckOf(c) === 'kvsg' || c.topic === BLANKS;
 const firstId = t => deck.cards.find(c => c.topic === t)?.id || '';
 const quizTopics = () => [...new Set(deck.cards.filter(isQuiz).map(c => c.topic))].sort((a, b) => ((QUIZ_ORDER.indexOf(a) + 1 || 99) - (QUIZ_ORDER.indexOf(b) + 1 || 99)) || firstId(a).localeCompare(firstId(b), undefined, { numeric: true }));
 // the daily lessons (0-daily-lessons/README.md): which quizzes go with each day's topic
 const SG = t => 'KV SG 2025: ' + t;
 const TODAY = {
-  '2026-10-30': ['Day 1: Electrical, APU, Fire, FOM 4', [SG('Electrical'), SG('Auxiliary Power Unit (APU)'), SG('Fire Protection'), 'FOM Ch 4 review']],
-  '2026-10-31': ['Day 2: Fuel, Hydraulics, Flight Controls', [SG('Fuel'), SG('Hydraulics'), SG('Flight Control/Stall Protection')]],
-  '2026-11-01': ['Day 3: Bleed, Pressurization, Ice', [SG('Pneumatics'), SG('Air Conditioning/Environmental Control Systems'), SG('Pressurization'), SG('Ice and Rain Protection'), SG('Oxygen')]],
-  '2026-11-02': ['Day 4: Engines, Gear, AFCS, FOM 5', [SG('Engines/Powerplants'), SG('Landing Gear'), SG('Brakes'), SG('Nose Wheel Steering'), SG('Autoflight Control System (AFCS)'), 'FOM Ch 5 review']],
-  '2026-11-03': ['Day 5: Mock KV', ['Limitations & IAI test', SG('Limitations'), SG('Immediate Action Items')]],
-  '2026-11-04': ['Day 6: KV morning', [SG('Limitations'), SG('Immediate Action Items')]],
+  '2026-10-30': ['Day 1: Electrical, APU, Fire, FOM 4', [BLANKS, SG('Electrical'), SG('Auxiliary Power Unit (APU)'), SG('Fire Protection'), 'FOM Ch 4 review']],
+  '2026-10-31': ['Day 2: Fuel, Hydraulics, Flight Controls', [BLANKS, SG('Fuel'), SG('Hydraulics'), SG('Flight Control/Stall Protection')]],
+  '2026-11-01': ['Day 3: Bleed, Pressurization, Ice', [BLANKS, SG('Pneumatics'), SG('Air Conditioning/Environmental Control Systems'), SG('Pressurization'), SG('Ice and Rain Protection'), SG('Oxygen')]],
+  '2026-11-02': ['Day 4: Engines, Gear, AFCS, FOM 5', [BLANKS, SG('Engines/Powerplants'), SG('Landing Gear'), SG('Brakes'), SG('Nose Wheel Steering'), SG('Autoflight Control System (AFCS)'), 'FOM Ch 5 review']],
+  '2026-11-03': ['Day 5: Mock KV', [BLANKS, 'Limitations & IAI test', SG('Limitations'), SG('Immediate Action Items')]],
+  '2026-11-04': ['Day 6: KV morning', [BLANKS, SG('Limitations'), SG('Immediate Action Items')]],
 };
-const quizGroup = t => deck.cards.find(c => c.topic === t && deckOf(c) === 'kvsg') ? 'KV Guide 2025, by system' : /homework/i.test(t) ? 'Homework' : /^KV:/.test(t) ? 'KV prep' : 'Company tests and reviews';
+const quizGroup = t => t === BLANKS ? 'KV prep' : deck.cards.find(c => c.topic === t && deckOf(c) === 'kvsg') ? 'KV Guide 2025, by system' : /homework/i.test(t) ? 'Homework' : /^KV:/.test(t) ? 'KV prep' : 'Company tests and reviews';
 const GROUPS = ['KV Guide 2025, by system', 'Company tests and reviews', 'KV prep', 'Homework'];
 const noScore = c => c.noscore || /^(Not answerable|I don't know)/.test(c.a || '');
 const quizCards = t => deck.cards.filter(c => c.topic === t && !isDropped(c.id)).sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
@@ -296,7 +297,7 @@ const quizState = t => ({ quiz: t, qn: 0, qok: 0, miss: [], retry: [], round: 1,
 function startRedo(t, cards) { if (!cards.length) return; delete sessions.quiz[t + REDO]; S = { queue: mix(cards, replay()), i: 0, shown: false, t0: Date.now(), total: cards.length, done: 0, rl: {}, ...quizState(t), redo: true }; viewStudy(); }
 function quizBox() {
   const all = quizTopics().map(t => [t, quizLabel(t), quizCards(t).length]).filter(x => x[2]);
-  const q = all.filter(([t]) => settings.deck === 'all' || settings.deck === 'mine' || deck.cards.some(c => c.topic === t && deckOf(c) === settings.deck));
+  const q = all.filter(([t]) => t === BLANKS || settings.deck === 'all' || settings.deck === 'mine' || deck.cards.some(c => c.topic === t && deckOf(c) === settings.deck));
   if (!q.length) return '';
   const btn = ([t, l, n]) => { const r = settings.quiz?.[t]; const p = sessions.quiz[t]; return `<button data-quiz="${esc(t)}"${p ? ' class="paused"' : ''}><b>${esc(l)}</b><small>${p ? `▶ resume at ${p.i + 1} of ${p.ids.length}` : `${n} questions${r ? ` · last ${r.ok}/${r.n}` : ''}`}</small></button>`; };
   const d = new Date(), day = TODAY[`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`];
@@ -342,7 +343,7 @@ function viewStudy() {
   }
   studyMode(true); S.cur = null; const c = S.queue[S.i]; S.t0 = Date.now(); S.shown = false; S.errors = 0; S.pos = 0;
   const prog = `<div class="prog"><i style="width:${S.i / S.queue.length * 100}%"></i></div>` + (S.round > 1 ? `<div class="rnd">${S.quiz ? 'Round' : 'Review round'} ${S.round}: the ${S.queue.length - S.roundStart} you missed · ${S.queue.length - S.i} left</div>` : S.quiz ? `<div class="rnd">${S.redo ? 'Missed drill · ' : ''}Question ${S.i + 1} of ${S.queue.length}</div>` : '');
-  const body = { flip: rFlip, cloze: rCloze, mc: rMc, typed: rTyped, steps: rSteps }[c.type] || rFlip;
+  const body = isBlank(c) ? rBlank : { flip: rFlip, cloze: rCloze, mc: rMc, typed: rTyped, steps: rSteps }[c.type] || rFlip;
   $('#main').innerHTML = prog + `<div class="card" id="cc">${head(c)}</div><div id="ctl"></div>`;
   body(c);
 }
@@ -502,6 +503,30 @@ function rMc(c) {
     $('#ctl').innerHTML = `<button class="pri" style="width:100%" id="nx">Next</button>${flagBtn(c)}`;
     $('#nx').onclick = () => busy || go(-1, next); wireFlag(c);
   });
+}
+// fill in the blank: the memory-item cloze cards, one box per blank, typed and checked
+const isBlank = c => c.type === 'cloze' && c.topic === BLANKS;
+const normBlank = s => s.toLowerCase().replace(/[−–]/g, '-').replace(/&/g, 'and').replace(/°\s*[cf]?/g, '').replace(/(\d)\s*(?:c|m|mach)\b/g, '$1')
+  .replace(/\b(?:ft|feet|kt|kts|knots|kias|min|mins|minutes?|lbs?|psi|agl|sec|secs|seconds?|hours?|hr)\b\.?/g, '').replace(/\b0\./g, '.').replace(/[\s,()'"…]/g, '').replace(/\.$/, '');
+const blankOk = (got, a) => { const g = normBlank(got); if (!g) return false; const alts = [a, a.replace(/\(.*?\)/g, ''), ...(a.match(/\((.*?)\)/g) || []).map(x => x.slice(1, -1))]; return alts.some(x => normBlank(x) === g); };
+function rBlank(c) {
+  const ans = [...c.q.matchAll(/\{\{c\d+::(.*?)\}\}/g)].map(m => m[1]); let k = 0;
+  const html = esc(c.q).replace(/\{\{c\d+::(.*?)\}\}/g, (_, a) => `<input class="bk" data-k="${k++}" style="width:${Math.min(16, Math.max(4, a.length * .62 + 1.5))}em" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="next">`);
+  $('#cc').insertAdjacentHTML('beforeend', `<div class="q bkq">${html}</div>`);
+  $('#ctl').innerHTML = `<button class="pri" style="width:100%" id="sh">Check</button>`;
+  const ins = [...document.querySelectorAll('#cc .bk')];
+  const check = () => {
+    if (S.shown) return; S.shown = true;
+    let bad = 0;
+    ins.forEach((x, i) => { const ok = blankOk(x.value, ans[i]); if (!ok) bad++; x.classList.add(ok ? 'ok' : 'no'); x.readOnly = true;
+      if (!ok) x.insertAdjacentHTML('afterend', `<span class="blank bkfix">${esc(ans[i])}</span>`); });
+    const sug = bad === 0 ? 3 : bad === 1 && ans.length >= 3 ? 2 : 1;
+    reveal(c, `<div class="a">${bad ? `${ans.length - bad} of ${ans.length} right.` : 'All right.'}</div>`);
+    gradePanel(c, sug);
+  };
+  ins.forEach((x, i) => x.onkeydown = e => { if (e.key !== 'Enter') return; e.preventDefault(); if (ins[i + 1]) ins[i + 1].focus(); else check(); });
+  $('#sh').onclick = check;
+  if (ins[0] && matchMedia('(pointer:fine)').matches) ins[0].focus();
 }
 // typed recall with word diff
 const normTxt = s => s.toLowerCase().replace(/^\s*\d+\.\s*/gm, '').replace(/[:.,;()"']/g, ' ').split(/\s+/).filter(Boolean);
