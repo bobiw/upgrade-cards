@@ -16,7 +16,7 @@ const kvSet = (k, v) => new Promise((res, rej) => { const t = idb.transaction('k
 
 let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '', deck: 'mine', hideDups: true, refDark: 'auto' };
 let S = null; // study session
-const APP = 'v26';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
+const APP = 'v27';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
 // paused sessions survive closing the app: { study: {...}, quiz: { topic: {...} } }, saved after every answer
 let sessions = { study: null, quiz: {} };
 const REDO = ' · missed';                       // a missed-only drill is saved beside its quiz
@@ -920,9 +920,19 @@ async function dlRun() {                               // works through dlq; the
       const buf = await libBytes(f, (g, t) => { const pr = $('#aprog'); if (pr && tab === 'listen') pr.textContent = `${c.title}: ${(g / 1048576).toFixed(1)} of ${((t || c.size) / 1048576).toFixed(1)} MB${dlq.length ? ` · ${dlq.length} more queued` : ''}`; });
       if (await sha256(buf) !== c.sha) throw new Error('download did not match its checksum; try again');
       await kvSet('aud:' + f, buf); L.have[f] = c.sha; await kvSet('settings', settings);
+      if (playing?.file === f) audSwap(c, buf);
     } catch (e) { dlErr = c.title + ': ' + e.message; }
   }
   dlOn = null; dlRun.busy = false; redrawListen();
+}
+function audSwap(c, buf) {                             // the chapter playing was just updated: carry on in the new version
+  const t = player.currentTime, was = !player.paused, old = playing.sections || [], k = secAt(playing, t), off = t - (old[k]?.t || 0);
+  const ns = c.sections || [], n = ns.find(x => x.title === old[k]?.title) || ns[k];   // same section by name, else by number
+  const at = Math.max(0, Math.min((n ? n.t + off : t), (c.dur || 1e9) - 1));
+  if (player.src) URL.revokeObjectURL(player.src);
+  playing = c; nowSec = -1; player.src = URL.createObjectURL(new Blob([buf], { type: 'audio/mp4' }));
+  player.addEventListener('loadedmetadata', () => { player.currentTime = at; player.playbackRate = LS().rate || 1; if (was) player.play().catch(() => {}); audMeta(); paintNow(); }, { once: true });
+  LS().pos[c.file] = at; toast('Now playing the new version of ' + c.title);
 }
 async function audNext() {                             // chapter ended: first downloaded item in Up next, else the book's next chapter
   const L = LS(), ix = await kvGet('audindex'), q = L.queue ||= [];
