@@ -16,7 +16,7 @@ const kvSet = (k, v) => new Promise((res, rej) => { const t = idb.transaction('k
 
 let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '', deck: 'mine', hideDups: true, refDark: 'auto' };
 let S = null; // study session
-const APP = 'v22';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
+const APP = 'v23';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
 // paused sessions survive closing the app: { study: {...}, quiz: { topic: {...} } }, saved after every answer
 let sessions = { study: null, quiz: {} };
 const REDO = ' · missed';                       // a missed-only drill is saved beside its quiz
@@ -511,7 +511,7 @@ const normBlank = s => s.toLowerCase().replace(/[−–]/g, '-').replace(/&/g, '
 const blankOk = (got, a) => { const g = normBlank(got); if (!g) return false; const alts = [a, a.replace(/\(.*?\)/g, ''), ...(a.match(/\((.*?)\)/g) || []).map(x => x.slice(1, -1))]; return alts.some(x => normBlank(x) === g); };
 function rBlank(c) {
   const ans = [...c.q.matchAll(/\{\{c\d+::(.*?)\}\}/g)].map(m => m[1]); let k = 0;
-  const html = esc(c.q).replace(/\{\{c\d+::(.*?)\}\}/g, (_, a) => `<input class="bk" data-k="${k++}" style="width:${Math.min(16, Math.max(2.5, a.length * .55 + .5))}em" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="next">`);
+  const html = esc(c.q).replace(/\{\{c\d+::(.*?)\}\}/g, (_, a) => `<input class="bk" data-k="${k++}" style="width:${Math.min(16, Math.max(2.5, a.length * .55 + .5))}em" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="next">`).replace(/\n/g, '<br>');   // lists: one item per line
   $('#cc').insertAdjacentHTML('beforeend', `<div class="q bkq">${html}</div>`);
   $('#ctl').innerHTML = `<button class="pri" style="width:100%" id="sh">Check</button>`;
   const ins = [...document.querySelectorAll('#cc .bk')]; let sug = 1;
