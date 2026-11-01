@@ -16,7 +16,7 @@ const kvSet = (k, v) => new Promise((res, rej) => { const t = idb.transaction('k
 
 let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '', deck: 'mine', hideDups: true, refDark: 'auto' };
 let S = null; // study session
-const APP = 'v35';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
+const APP = 'v36';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
 // paused sessions survive closing the app: { study: {...}, quiz: { topic: {...} } }, saved after every answer
 let sessions = { study: null, quiz: {} };
 const REDO = ' · missed';                       // a missed-only drill is saved beside its quiz
@@ -947,7 +947,7 @@ function audSwap(c, buf) {                             // the chapter playing wa
   if (player.src) URL.revokeObjectURL(player.src);
   playing = c; nowSec = -1; player.src = URL.createObjectURL(new Blob([buf], { type: 'audio/mp4' }));
   player.addEventListener('loadedmetadata', () => { player.currentTime = at; player.playbackRate = LS().rate || 1; if (was) player.play().catch(() => {}); audMeta(); paintNow(); }, { once: true });
-  LS().pos[c.file] = at; toast('Now playing the new version of ' + c.title);
+  LS().pos[c.file] = at; toast('Now playing the new version of ' + c.title); loadCaps(c);
 }
 async function audNext() {                             // chapter ended: first downloaded item in Up next, else the book's next chapter
   const L = LS(), ix = await kvGet('audindex'), q = L.queue ||= [];
@@ -987,13 +987,36 @@ function audMeta() {
   const sec = playing.sections?.[nowSec]?.title || playing.title;
   navigator.mediaSession.metadata = new MediaMetadata({ title: sec, artist: playing.title, album: playing.book, artwork: [{ src: 'icon-512.png', sizes: '512x512', type: 'image/png' }] });
 }
+// ---------- captions: the passage being spoken, two short lines at a time (B, 2026-11-01) ----------
+// <chapter>.cap.json beside the .m4a in the private repo: [[start s, length s, text], …] per recorded passage. Long passages
+// are cut into ~80-character chunks at word breaks, each timed by its share of the passage's characters.
+let caps = null;
+async function loadCaps(c) {
+  caps = null; const want = c?.file; if (!c?.cap) { paintNow(); return; }
+  let got = await kvGet('cap:' + c.file);
+  if (!got || got.sha !== c.capsha) {
+    try { got = { sha: c.capsha, rows: JSON.parse(new TextDecoder().decode(await libBytes(c.cap))) }; await kvSet('cap:' + c.file, got); }
+    catch (_) { if (!got) return; }                     // offline: an older caption file still beats none
+  }
+  if (playing?.file !== want) return;
+  const out = [];
+  for (const [t, d, text] of got.rows) {
+    const words = text.split(/\s+/), parts = []; let cur = '';
+    for (const w of words) { if (cur && (cur + ' ' + w).length > 80) { parts.push(cur); cur = w; } else cur = cur ? cur + ' ' + w : w; if (/[.?!:;]$/.test(cur) && cur.length > 45) { parts.push(cur); cur = ''; } }
+    if (cur) parts.push(cur);
+    const n = parts.reduce((a, x) => a + x.length, 0) || 1; let at = t;
+    for (const x of parts) { const len = d * x.length / n; out.push([at, at + len, x]); at += len; }
+  }
+  caps = out; paintNow();
+}
+function capAt(t) { if (!caps?.length) return ''; let lo = 0, hi = caps.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (caps[m][0] <= t) lo = m; else hi = m - 1; } return caps[lo][0] <= t && t < caps[lo][1] + .3 ? caps[lo][2] : ''; }
 async function audPlay(ch, at) {
   const buf = await kvGet('aud:' + ch.file); if (!buf) return;
   const p = audEl(); if (p.src) URL.revokeObjectURL(p.src);
   playing = ch; nowSec = -1; LS().last = ch.file;
   p.src = URL.createObjectURL(new Blob([buf], { type: 'audio/mp4' }));
   p.currentTime = at ?? LS().pos[ch.file] ?? 0; p.playbackRate = LS().rate || 1;
-  await p.play().catch(() => {}); p.playbackRate = LS().rate || 1; paintNow();
+  await p.play().catch(() => {}); p.playbackRate = LS().rate || 1; paintNow(); loadCaps(ch);
 }
 function audSection(dir) {
   if (!playing) return; const s = playing.sections || [], t = player.currentTime, k = secAt(playing, t);
@@ -1012,6 +1035,7 @@ function paintNow() {
   const r = LS().rate || 1;                            // times shown at the playing speed: a 60 min chapter at 1.5× reads 40 min
   el.querySelector('.nc').textContent = `${clock(player.currentTime / r)} / ${clock((player.duration || playing.dur) / r)}${r !== 1 ? ` at ${r}×` : ''}`;
   el.querySelector('#npp').textContent = player.paused ? '▶︎' : '⏸';
+  const cp = $('#cap'); if (cp) { const on = LS().cc !== false && caps?.length; cp.hidden = !on; if (on) { const x = capAt(player.currentTime); if (cp.textContent !== x) cp.textContent = x; } }
   const u = $('#upleft'); if (u) u.textContent = mins(((player.duration || playing.dur) - player.currentTime + upQDur) / r) + ' left';   // this chapter's rest + Up next
   el.querySelector('input[type=range]').value = player.currentTime / (player.duration || playing.dur) * 1000 || 0;
 }
@@ -1058,9 +1082,9 @@ async function viewListen() {
       }
       return out.join('') || `<div class="card"><p class="note">Nothing matches.</p></div>`;
     };
-    const now = playing ? `<div class="card" id="now"><div class="nt"></div><input type="range" min="0" max="1000" value="0" id="nps" style="width:100%">
+    const now = playing ? `<div class="card" id="now"><div id="cap" class="cap" hidden></div><div class="nt"></div><input type="range" min="0" max="1000" value="0" id="nps" style="width:100%">
       <div class="nc note"></div><div class="row"><button id="npb" title="Previous section">⏮</button><button id="np15">−15</button><button class="pri" id="npp">▶︎</button><button id="np30">+30</button><button id="npn" title="Next section">⏭</button></div>
-      <div class="row" style="margin-top:8px"><select id="nprate">${[1, 1.25, 1.5, 1.75, 2].map(r => `<option value="${r}" ${r == (L.rate || 1) ? 'selected' : ''}>${r}×</option>`).join('')}</select></div>
+      <div class="row" style="margin-top:8px"><button class="small${L.cc !== false ? ' on' : ''}" id="npcc" title="Captions">CC</button><select id="nprate">${[1, 1.25, 1.5, 1.75, 2].map(r => `<option value="${r}" ${r == (L.rate || 1) ? 'selected' : ''}>${r}×</option>`).join('')}</select></div>
       <label class="note" style="display:block;margin-top:8px"><input type="checkbox" id="npcont" ${L.cont !== false ? 'checked' : ''}> Keep playing: when Up next is empty, go on to the book's next chapter</label>
       <details style="margin-top:8px"><summary>Sections (${playing.sections?.length || 0})</summary>${(playing.sections || []).map((x, i) => `<button class="small sec" data-st="${x.t}">${clock(x.t / (L.rate || 1))} ${esc(x.title)}</button>`).join('')}</details></div>` : '';
     const stl = (ix?.books || []).flatMap(b => b.chapters.filter(c => have[c.file] && have[c.file] !== c.sha).map(c => ({ b, c })));   // out of date: listed under Check for updates
@@ -1093,7 +1117,8 @@ async function viewListen() {
     main.querySelectorAll('[data-af]').forEach(b => b.onclick = () => { L.af = b.dataset.af; kvSet('settings', settings); draw(); });
     if (playing) {
       paintNow();
-      $('#npp').onclick = () => player.paused ? player.play() : player.pause();
+      $('#npp').onclick = $('#cap').onclick = () => player.paused ? player.play() : player.pause();
+      $('#npcc').onclick = () => { L.cc = L.cc === false; kvSet('settings', settings); draw(); };
       $('#np15').onclick = () => { player.currentTime -= 15; }; $('#np30').onclick = () => { player.currentTime += 30; };
       $('#npb').onclick = () => audSection(-1); $('#npn').onclick = () => audSection(1);
       $('#nps').oninput = e => { player.currentTime = e.target.value / 1000 * (player.duration || playing.dur); };
@@ -1103,7 +1128,7 @@ async function viewListen() {
     }
   };
   await draw();
-  if (!playing && L.last && ix) { const bk = ix.books.find(x => x.chapters.some(c => c.file === L.last)); const c = bk?.chapters.find(c => c.file === L.last); if (c && L.have[c.file]) { playing = { ...c, book: bk.title }; const buf = await kvGet('aud:' + c.file); if (buf) { audEl().src = URL.createObjectURL(new Blob([buf], { type: 'audio/mp4' })); player.currentTime = L.pos[c.file] || 0; } else playing = null; draw(); } }
+  if (!playing && L.last && ix) { const bk = ix.books.find(x => x.chapters.some(c => c.file === L.last)); const c = bk?.chapters.find(c => c.file === L.last); if (c && L.have[c.file]) { playing = { ...c, book: bk.title }; const buf = await kvGet('aud:' + c.file); if (buf) { audEl().src = URL.createObjectURL(new Blob([buf], { type: 'audio/mp4' })); player.currentTime = L.pos[c.file] || 0; loadCaps(playing); } else playing = null; draw(); } }
   if (navigator.onLine && Date.now() - (L.checked || 0) > 864e5) { ix = await audIndex(true); if (tab === 'listen') draw(); }
 }
 
