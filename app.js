@@ -16,7 +16,7 @@ const kvSet = (k, v) => new Promise((res, rej) => { const t = idb.transaction('k
 
 let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '', deck: 'mine', hideDups: true, refDark: 'auto' };
 let S = null; // study session
-const APP = 'v28';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
+const APP = 'v29';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
 // paused sessions survive closing the app: { study: {...}, quiz: { topic: {...} } }, saved after every answer
 let sessions = { study: null, quiz: {} };
 const REDO = ' · missed';                       // a missed-only drill is saved beside its quiz
@@ -907,7 +907,7 @@ function libPrompt() {
 // Nothing downloads by itself: the small index is checked at most once a day (or on "Check"), and a chapter whose audio
 // changed is only marked "update available". B taps to download each chapter.
 // Downloads queue up and run one at a time; "Up next" is B's own play queue, played before the rest of the book.
-let player = null, playing = null, nowSec = -1, dlq = [], dlOn = null, dlErr = '', listenDraw = null;
+let player = null, playing = null, nowSec = -1, dlq = [], dlOn = null, dlErr = '', listenDraw = null, playAll = null;   // playAll: Play all's first chapter, started when its download lands
 const LS = () => (settings.listen ||= { pos: {}, rate: 1, have: {} });
 const chOf = (ix, f) => { const b = ix?.books.find(b => b.chapters.some(c => c.file === f)); return b && { ...b.chapters.find(c => c.file === f), book: b.title }; };
 const redrawListen = () => { if (tab === 'listen') listenDraw?.(); };
@@ -921,6 +921,7 @@ async function dlRun() {                               // works through dlq; the
       if (await sha256(buf) !== c.sha) throw new Error('download did not match its checksum; try again');
       await kvSet('aud:' + f, buf); L.have[f] = c.sha; await kvSet('settings', settings);
       if (playing?.file === f) audSwap(c, buf);
+      if (playAll === f) { playAll = null; await audPlay(c); }
     } catch (e) { dlErr = c.title + ': ' + e.message; }
   }
   dlOn = null; dlRun.busy = false; redrawListen();
@@ -1020,15 +1021,18 @@ async function viewListen() {
     L.open ||= {};
     const groups = b => { const by = {}; for (const c of b.chapters) { const k = c.title.includes(': ') ? c.title.split(': ')[0] : ''; (by[k] ||= []).push(c); }
       const g = [], other = []; for (const [k, cs] of Object.entries(by)) (k && cs.length >= 3 ? g.push([k, cs]) : other.push(...cs)); return g.length ? (other.length ? [...g, ['Other', other]] : g) : null; };
-    const fold = (key, label, n, inner, cls) => { const on = aqry || (L.af || 'all') !== 'all' || (L.open ||= {})[key]; return `<details class="${cls}" data-fold="${esc(key)}" ${on ? 'open' : ''}><summary>${esc(label)} <small>${n}</small></summary>${inner}</details>`; };
+    // every book and group shows its total time and a Play all: first chapter now, the rest in order as Up next (B, 2026-11-01)
+    const pa = {}, tot = cs => mins(cs.reduce((t, c) => t + (c.dur || 0), 0) / (L.rate || 1));
+    const fold = (key, label, n, inner, cls, cs) => { const on = aqry || (L.af || 'all') !== 'all' || (L.open ||= {})[key]; pa[key] = cs.map(c => c.file);
+      return `<details class="${cls}" data-fold="${esc(key)}" ${on ? 'open' : ''}><summary>${esc(label)} <small>${n} · ${tot(cs)}</small> <button class="small pri" data-pa="${esc(key)}" aria-label="Play all">▶︎ All</button></summary>${inner}</details>`; };
     const lib = () => {
       const w = aqry.toLowerCase().split(/\s+/).filter(Boolean), out = [];
       const ok = (b, c) => (L.af !== 'dev' || have[c.file]) && (L.af !== 'prog' || L.pos[c.file] > 5) && w.every(x => (c.title + ' ' + b.title).toLowerCase().includes(x));
       for (const b of ix?.books || []) {
         const cs = b.chapters.filter(c => ok(b, c)); if (!cs.length) continue;
         const d = cs.filter(c => have[c.file]).length, n = `${cs.length}${d ? ` · ${d} on device` : ''}`, g = groups({ chapters: cs });
-        const inner = g ? g.map(([k, gc]) => fold(b.title + '|' + k, k, gc.length, gc.map(c => row(c, k === 'Other' ? c.title : c.title.slice(k.length + 2))).join(''), 'qg')).join('') : cs.map(c => row(c, c.title)).join('');
-        out.push(fold(b.title, b.title, n, inner, 'card abook'));
+        const inner = g ? g.map(([k, gc]) => fold(b.title + '|' + k, k, gc.length, gc.map(c => row(c, k === 'Other' ? c.title : c.title.slice(k.length + 2))).join(''), 'qg', gc)).join('') : cs.map(c => row(c, c.title)).join('');
+        out.push(fold(b.title, b.title, n, inner, 'card abook', cs));
       }
       return out.join('') || `<div class="card"><p class="note">Nothing matches.</p></div>`;
     };
@@ -1038,7 +1042,7 @@ async function viewListen() {
       <label class="note" style="display:block;margin-top:8px"><input type="checkbox" id="npcont" ${L.cont !== false ? 'checked' : ''}> Keep playing: when Up next is empty, go on to the book's next chapter</label>
       <details style="margin-top:8px"><summary>Sections (${playing.sections?.length || 0})</summary>${(playing.sections || []).map((x, i) => `<button class="small sec" data-st="${x.t}">${clock(x.t / (L.rate || 1))} ${esc(x.title)}</button>`).join('')}</details></div>` : '';
     const stl = (ix?.books || []).flatMap(b => b.chapters.filter(c => have[c.file] && have[c.file] !== c.sha).map(c => ({ b, c })));   // out of date: listed under Check for updates
-    const upn = playing || q.length ? `<div class="card"><h2>Up next</h2>${q.length ? q.map((x, i) => { const c = chOf(ix, x); return `<div class="arow"><b>${i + 1}. ${esc(c?.title || x)}</b><small>${esc(c?.book || '')}${have[x] ? '' : dlOn === x || dlq.includes(x) ? ' · downloading' : ' · not downloaded, skipped until it is'}</small><span class="abtn">${i ? `<button class="small" data-qu="${i}" aria-label="Move up">↑</button>` : ''}<button class="small" data-qx="${i}" aria-label="Remove from Up next">✕</button></span></div>`; }).join('') + '<div class="row" style="margin-top:8px"><button class="small" id="qclr">Clear</button></div>' : `<p class="note">Empty. Tap + Next on a chapter to play it after this one.</p>`}</div>` : '';
+    const upn = playing || q.length ? `<details class="card abook" id="upnx" ${L.upMin ? '' : 'open'}><summary>Up next <small>${q.length}</small></summary>${q.length ? q.map((x, i) => { const c = chOf(ix, x); return `<div class="arow"><b>${i + 1}. ${esc(c?.title || x)}</b><small>${esc(c?.book || '')}${have[x] ? '' : dlOn === x || dlq.includes(x) ? ' · downloading' : ' · not downloaded, skipped until it is'}</small><span class="abtn">${i ? `<button class="small" data-qu="${i}" aria-label="Move up">↑</button>` : ''}<button class="small" data-qx="${i}" aria-label="Remove from Up next">✕</button></span></div>`; }).join('') + '<div class="row" style="margin-top:8px"><button class="small" id="qclr">Clear</button></div>' : `<p class="note">Empty. Tap + Next on a chapter to play it after this one.</p>`}</details>` : '';
     main.innerHTML = `${now}${upn}<div class="card"><h2>Listen</h2><p class="note">${ix ? `${(used / 1048576).toFixed(0)} MB on this device${upd ? ` · ${upd} chapter${upd > 1 ? 's' : ''} out of date` : ''}. Audio only downloads when you tap.` : 'No audio list yet. Tap Check (needs internet; a few KB).'}${L.checked ? '<br>Checked ' + new Date(L.checked).toLocaleString() : ''}${L.msg ? '<br>' + esc(L.msg) : ''}</p><div class="row"><button id="achk">Check for updates</button>${stl.length > 1 ? `<button id="aupall" class="updb">Update all ${stl.length}</button>` : ''}</div>${stl.map(({ b, c }) => { const f = esc(c.file); return `<div class="arow"><b>${esc(c.title)}</b><small>${esc(b.title)} · ${(c.size / 1048576).toFixed(0)} MB<span class="upd">● New version</span></small><span class="abtn">${dlOn === c.file ? '<button class="small" disabled>Downloading…</button>' : dlq.includes(c.file) ? `<button class="small" data-aq="${f}">Queued ✕</button>` : `<button class="small updb" data-ad="${f}">Update</button>`}</span></div>`; }).join('')}<div class="prog" id="aprog">${esc(dlErr)}</div></div><div class="card afind"><input type="search" id="asq" placeholder="Search chapters" value="${esc(aqry)}" autocomplete="off"><div class="seg">${[['all', 'All'], ['dev', 'On device'], ['prog', 'Started']].map(([k, t]) => `<button class="small${(L.af || 'all') === k ? ' on' : ''}" data-af="${k}">${t}</button>`).join('')}</div></div><div id="alib">${lib()}</div>`;
     if ($('#aupall')) $('#aupall').onclick = () => { dlErr = ''; stl.forEach(({ c }) => { if (dlOn !== c.file && !dlq.includes(c.file)) dlq.push(c.file); }); dlRun(); draw(); };
     $('#achk').onclick = async () => { $('#achk').textContent = 'Checking…'; ix = await audIndex(true); draw(); };
@@ -1049,11 +1053,17 @@ async function viewListen() {
       root.querySelectorAll('[data-qu]').forEach(b => b.onclick = () => { const i = +b.dataset.qu; q.splice(i - 1, 0, q.splice(i, 1)[0]); qSave(); });
       root.querySelectorAll('[data-qx]').forEach(b => b.onclick = () => { q.splice(+b.dataset.qx, 1); qSave(); });
       root.querySelectorAll('[data-aq]').forEach(b => b.onclick = () => { dlq.splice(dlq.indexOf(b.dataset.aq), 1); draw(); });
+      root.querySelectorAll('[data-pa]').forEach(b => b.onclick = e => { e.preventDefault(); e.stopPropagation();   // in the summary: don't fold
+        const [f0, ...rest] = pa[b.dataset.pa] || []; if (!f0) return; dlErr = '';
+        q.length = 0; q.push(...rest); for (const f of [f0, ...rest]) if (!have[f] && dlOn !== f && !dlq.includes(f)) dlq.push(f);
+        if (have[f0]) { playAll = null; audPlay(chOf(ix, f0), 0).then(draw); } else { playAll = f0; toast('Downloading; plays when the first chapter is in'); }
+        dlRun(); qSave(); });
       root.querySelectorAll('[data-fold]').forEach(d => d.ontoggle = () => { if (aqry || (L.af || 'all') !== 'all') return; L.open[d.dataset.fold] = d.open || undefined; kvSet('settings', settings); });
       root.querySelectorAll('[data-ax]').forEach(b => b.onclick = async () => { const f = b.dataset.ax; if (playing?.file === f) { player.pause(); playing = null; } await kvSet('aud:' + f, null); delete L.have[f]; await kvSet('settings', settings); draw(); });
       root.querySelectorAll('[data-ad]').forEach(b => b.onclick = () => { dlErr = ''; dlq.push(b.dataset.ad); dlRun(); draw(); });
     };
     bind(main);
+    if ($('#upnx')) $('#upnx').ontoggle = e => { L.upMin = !e.target.open || undefined; kvSet('settings', settings); };
     if ($('#qclr')) $('#qclr').onclick = () => { q.length = 0; qSave(); };
     $('#asq').oninput = e => { aqry = e.target.value.trim(); $('#alib').innerHTML = lib(); bind($('#alib')); };
     main.querySelectorAll('[data-af]').forEach(b => b.onclick = () => { L.af = b.dataset.af; kvSet('settings', settings); draw(); });

@@ -213,3 +213,4 @@ main.study #ctl{flex:none}
 .abook summary small{color:var(--mut);font-weight:400;font-size:.8em}.abook .qg{padding-left:6px}
 .afind input{width:100%;box-sizing:border-box;margin-bottom:8px}
 .afind .seg{padding:0;max-width:none}
+summary [data-pa]{float:right;margin-left:8px}
