@@ -1,4 +1,4 @@
-const V = 'cards-v33';
+const V = 'cards-v34';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png', 'lib/pdf.min.js', 'lib/pdf.worker.min.js'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -6,7 +6,7 @@ self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Pr
 // network-first request forever). Refresh the saved copy in the background, so an update shows on the next launch.
 self.addEventListener('fetch', e => {
   const req = e.request;
-  if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
+  if (req.method !== 'GET' || new URL(req.url).origin !== location.origin || req.cache === 'no-store') return;   // Settings' version check asks the network, not this cache
   e.respondWith((async () => {
     const cache = await caches.open(V);
     const hit = await cache.match(req, { ignoreSearch: true });
