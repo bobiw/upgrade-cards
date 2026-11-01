@@ -16,7 +16,7 @@ const kvSet = (k, v) => new Promise((res, rej) => { const t = idb.transaction('k
 
 let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '', deck: 'mine', hideDups: true, refDark: 'auto' };
 let S = null; // study session
-const APP = 'v32';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
+const APP = 'v33';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
 // paused sessions survive closing the app: { study: {...}, quiz: { topic: {...} } }, saved after every answer
 let sessions = { study: null, quiz: {} };
 const REDO = ' · missed';                       // a missed-only drill is saved beside its quiz
@@ -1046,6 +1046,10 @@ async function viewListen() {
     const lib = () => {
       const w = aqry.toLowerCase().split(/\s+/).filter(Boolean), out = [];
       const ok = (b, c) => (L.af !== 'dev' || have[c.file]) && (L.af !== 'prog' || L.pos[c.file] > 5) && w.every(x => (c.title + ' ' + b.title).toLowerCase().includes(x));
+      // Study days (index "playlists"): each day's panel chapters, then its PRM chapters, as one playlist with ▶︎ All (B, 2026-11-01)
+      const sb = { prm: 'PRM', poh: 'POH', panels: '', guides: 'Guide', cards: 'Cards' };
+      const days = (ix?.playlists || []).map(p => [p.title, p.files.map(f => { const b = ix.books.find(b => b.chapters.some(c => c.file === f)); return b && { b, c: b.chapters.find(c => c.file === f) }; }).filter(x => x && ok(x.b, x.c))]).filter(([, xs]) => xs.length);
+      if (days.length) out.push(fold('Study days', 'Study days', days.length + ' days', days.map(([t, xs]) => fold('day|' + t, t, xs.length, xs.map(({ b, c }) => row(c, (sb[b.id] ? sb[b.id] + ': ' : '') + c.title)).join(''), 'qg', xs.map(x => x.c))).join(''), 'card abook', days.flatMap(([, xs]) => xs.map(x => x.c))));
       for (const b of ix?.books || []) {
         const cs = b.chapters.filter(c => ok(b, c)); if (!cs.length) continue;
         const d = cs.filter(c => have[c.file]).length, n = `${cs.length}${d ? ` · ${d} on device` : ''}`, g = groups({ chapters: cs });
