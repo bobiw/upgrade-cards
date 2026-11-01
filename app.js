@@ -16,7 +16,7 @@ const kvSet = (k, v) => new Promise((res, rej) => { const t = idb.transaction('k
 
 let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '', deck: 'mine', hideDups: true, refDark: 'auto' };
 let S = null; // study session
-const APP = 'v31';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
+const APP = 'v32';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
 // paused sessions survive closing the app: { study: {...}, quiz: { topic: {...} } }, saved after every answer
 let sessions = { study: null, quiz: {} };
 const REDO = ' · missed';                       // a missed-only drill is saved beside its quiz
@@ -597,9 +597,22 @@ function viewStats() {
 }
 
 // ---------- settings / import / export ----------
+async function appUpdate() {                           // Settings' first line: compare with the published app.js; if newer, drop the saved copy and reload
+  const st = $('#appst'); st.textContent = 'Checking…';
+  try {
+    const t = await (await fetch('app.js?' + Date.now(), { cache: 'no-store' })).text(), v = t.match(/const APP = '(v\d+)'/)?.[1];
+    if (!v) throw new Error('could not read the published version');
+    if (v === APP) { st.textContent = `Up to date (${APP}).`; return; }
+    st.textContent = `Updating to ${v}…`;
+    await (await navigator.serviceWorker?.getRegistration())?.update().catch(() => {});
+    for (const k of await caches.keys()) await caches.delete(k);
+    location.reload();
+  } catch (e) { st.textContent = 'Could not check (needs internet): ' + e.message; }
+}
 function viewSettings() {
   const dr = deck.cards.filter(c => c.review === 'draft').length, dups = deck.cards.filter(c => c.dup?.some(d => d.sim >= .6)).length;
-  $('#main').innerHTML = `<div class="card"><b>Deck</b><p class="note">${deck.cards.length} cards (${dr} draft, ${dups} of Claude's duplicate yours) · built ${esc(deck.meta.built || 'never')}<br>${esc(Object.entries(deck.meta.revs || {}).map(([k, v]) => k + ' ' + v).join(' · '))}</p>
+  $('#main').innerHTML = `<div class="card"><div class="row" style="align-items:center"><b>App ${APP}</b><button class="small" id="appup">Check for update</button></div><p class="note" id="appst"></p></div>
+    <div class="card"><b>Deck</b><p class="note">${deck.cards.length} cards (${dr} draft, ${dups} of Claude's duplicate yours) · built ${esc(deck.meta.built || 'never')}<br>${esc(Object.entries(deck.meta.revs || {}).map(([k, v]) => k + ' ' + v).join(' · '))}</p>
     <label for="df">Load deck file (deck.json)</label><input type="file" id="df" accept=".json,application/json"></div>
     <div class="card"><b>Manuals (for the side-by-side page viewer)</b>
     <p class="note" id="mst">Checking…</p>
@@ -623,6 +636,7 @@ function viewSettings() {
     <div class="row"><button id="ex" class="pri">Export / share</button></div>
     <label for="pf">Import progress file</label><input type="file" id="pf" accept=".json,application/json"><p class="note" id="msg"></p></div>
     <div class="card"><span class="muted" id="per"></span></div>`;
+  $('#appup').onclick = appUpdate;
   $('#df').onchange = async e => {
     try {
       const d = JSON.parse(await e.target.files[0].text());
