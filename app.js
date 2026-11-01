@@ -16,7 +16,7 @@ const kvSet = (k, v) => new Promise((res, rej) => { const t = idb.transaction('k
 
 let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '', deck: 'mine', hideDups: true, refDark: 'auto' };
 let S = null; // study session
-const APP = 'v30';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
+const APP = 'v31';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
 // paused sessions survive closing the app: { study: {...}, quiz: { topic: {...} } }, saved after every answer
 let sessions = { study: null, quiz: {} };
 const REDO = ' · missed';                       // a missed-only drill is saved beside its quiz
@@ -1020,8 +1020,11 @@ async function viewListen() {
     // library: each book folds shut (open state remembered); a book whose titles share a "PRM: " style prefix is split into
     // groups by it. Search and the All / On device / Started filter show matching chapters only, with every group open
     L.open ||= {};
-    const groups = b => { const by = {}; for (const c of b.chapters) { const k = c.title.includes(': ') ? c.title.split(': ')[0] : ''; (by[k] ||= []).push(c); }
-      const g = [], other = []; for (const [k, cs] of Object.entries(by)) (k && cs.length >= 3 ? g.push([k, cs]) : other.push(...cs)); return g.length ? (other.length ? [...g, ['Other', other]] : g) : null; };
+    // "D3 · Overhead B: BLEED AIR" groups under "Day 3" (panels by study day, B 2026-11-01); else by the "PRM: " style prefix
+    const gkey = t => { const d = t.match(/^D(\d+) · /); return d ? 'Day ' + d[1] : t.includes(': ') ? t.split(': ')[0] : ''; };
+    const gname = (t, k) => k.startsWith('Day ') ? t.replace(/^D\d+ · /, '') : k === 'Other' ? t : t.slice(k.length + 2);
+    const groups = b => { const by = {}; for (const c of b.chapters) { const k = gkey(c.title); (by[k] ||= []).push(c); }
+      const g = [], other = []; for (const [k, cs] of Object.entries(by)) (k && (cs.length >= 3 || k.startsWith('Day ')) ? g.push([k, cs]) : other.push(...cs)); return g.length ? (other.length ? [...g, ['Other', other]] : g) : null; };
     // every book and group shows its total time and a Play all: first chapter now, the rest in order as Up next (B, 2026-11-01)
     const pa = {}, tot = cs => mins(cs.reduce((t, c) => t + (c.dur || 0), 0) / (L.rate || 1));
     const fold = (key, label, n, inner, cls, cs) => { const on = aqry || (L.af || 'all') !== 'all' || (L.open ||= {})[key]; pa[key] = cs.map(c => c.file);
@@ -1032,7 +1035,7 @@ async function viewListen() {
       for (const b of ix?.books || []) {
         const cs = b.chapters.filter(c => ok(b, c)); if (!cs.length) continue;
         const d = cs.filter(c => have[c.file]).length, n = `${cs.length}${d ? ` · ${d} on device` : ''}`, g = groups({ chapters: cs });
-        const inner = g ? g.map(([k, gc]) => fold(b.title + '|' + k, k, gc.length, gc.map(c => row(c, k === 'Other' ? c.title : c.title.slice(k.length + 2))).join(''), 'qg', gc)).join('') : cs.map(c => row(c, c.title)).join('');
+        const inner = g ? g.map(([k, gc]) => fold(b.title + '|' + k, k, gc.length, gc.map(c => row(c, gname(c.title, k))).join(''), 'qg', gc)).join('') : cs.map(c => row(c, c.title)).join('');
         out.push(fold(b.title, b.title, n, inner, 'card abook', cs));
       }
       return out.join('') || `<div class="card"><p class="note">Nothing matches.</p></div>`;
