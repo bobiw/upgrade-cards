@@ -16,7 +16,7 @@ const kvSet = (k, v) => new Promise((res, rej) => { const t = idb.transaction('k
 
 let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '', deck: 'mine', hideDups: true, refDark: 'auto' };
 let S = null; // study session
-const APP = 'v29';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
+const APP = 'v30';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
 // paused sessions survive closing the app: { study: {...}, quiz: { topic: {...} } }, saved after every answer
 let sessions = { study: null, quiz: {} };
 const REDO = ' · missed';                       // a missed-only drill is saved beside its quiz
@@ -907,7 +907,7 @@ function libPrompt() {
 // Nothing downloads by itself: the small index is checked at most once a day (or on "Check"), and a chapter whose audio
 // changed is only marked "update available". B taps to download each chapter.
 // Downloads queue up and run one at a time; "Up next" is B's own play queue, played before the rest of the book.
-let player = null, playing = null, nowSec = -1, dlq = [], dlOn = null, dlErr = '', listenDraw = null, playAll = null;   // playAll: Play all's first chapter, started when its download lands
+let player = null, playing = null, nowSec = -1, dlq = [], dlOn = null, dlErr = '', listenDraw = null, playAll = null, upQDur = 0;   // playAll: Play all's first chapter, started when its download lands
 const LS = () => (settings.listen ||= { pos: {}, rate: 1, have: {} });
 const chOf = (ix, f) => { const b = ix?.books.find(b => b.chapters.some(c => c.file === f)); return b && { ...b.chapters.find(c => c.file === f), book: b.title }; };
 const redrawListen = () => { if (tab === 'listen') listenDraw?.(); };
@@ -998,6 +998,7 @@ function paintNow() {
   const r = LS().rate || 1;                            // times shown at the playing speed: a 60 min chapter at 1.5× reads 40 min
   el.querySelector('.nc').textContent = `${clock(player.currentTime / r)} / ${clock((player.duration || playing.dur) / r)}${r !== 1 ? ` at ${r}×` : ''}`;
   el.querySelector('#npp').textContent = player.paused ? '▶︎' : '⏸';
+  const u = $('#upleft'); if (u) u.textContent = mins(((player.duration || playing.dur) - player.currentTime + upQDur) / r) + ' left';   // this chapter's rest + Up next
   el.querySelector('input[type=range]').value = player.currentTime / (player.duration || playing.dur) * 1000 || 0;
 }
 let aqry = '';                                         // Listen search text: kept while the app is open, not saved
@@ -1042,7 +1043,9 @@ async function viewListen() {
       <label class="note" style="display:block;margin-top:8px"><input type="checkbox" id="npcont" ${L.cont !== false ? 'checked' : ''}> Keep playing: when Up next is empty, go on to the book's next chapter</label>
       <details style="margin-top:8px"><summary>Sections (${playing.sections?.length || 0})</summary>${(playing.sections || []).map((x, i) => `<button class="small sec" data-st="${x.t}">${clock(x.t / (L.rate || 1))} ${esc(x.title)}</button>`).join('')}</details></div>` : '';
     const stl = (ix?.books || []).flatMap(b => b.chapters.filter(c => have[c.file] && have[c.file] !== c.sha).map(c => ({ b, c })));   // out of date: listed under Check for updates
-    const upn = playing || q.length ? `<details class="card abook" id="upnx" ${L.upMin ? '' : 'open'}><summary>Up next <small>${q.length}</small></summary>${q.length ? q.map((x, i) => { const c = chOf(ix, x); return `<div class="arow"><b>${i + 1}. ${esc(c?.title || x)}</b><small>${esc(c?.book || '')}${have[x] ? '' : dlOn === x || dlq.includes(x) ? ' · downloading' : ' · not downloaded, skipped until it is'}</small><span class="abtn">${i ? `<button class="small" data-qu="${i}" aria-label="Move up">↑</button>` : ''}<button class="small" data-qx="${i}" aria-label="Remove from Up next">✕</button></span></div>`; }).join('') + '<div class="row" style="margin-top:8px"><button class="small" id="qclr">Clear</button></div>' : `<p class="note">Empty. Tap + Next on a chapter to play it after this one.</p>`}</details>` : '';
+    upQDur = q.reduce((t, f) => t + (chOf(ix, f)?.dur || 0), 0);
+    const left = upQDur + (playing ? (player?.duration || playing.dur) - (player?.currentTime || 0) : 0);
+    const upn = playing || q.length ? `<details class="card abook" id="upnx" ${L.upMin ? '' : 'open'}><summary>Up next <small>${q.length} · <span id="upleft">${mins(left / (L.rate || 1))} left</span></small></summary>${q.length ? q.map((x, i) => { const c = chOf(ix, x); return `<div class="arow"><b>${i + 1}. ${esc(c?.title || x)}</b><small>${esc(c?.book || '')}${have[x] ? '' : dlOn === x || dlq.includes(x) ? ' · downloading' : ' · not downloaded, skipped until it is'}</small><span class="abtn">${i ? `<button class="small" data-qu="${i}" aria-label="Move up">↑</button>` : ''}<button class="small" data-qx="${i}" aria-label="Remove from Up next">✕</button></span></div>`; }).join('') + '<div class="row" style="margin-top:8px"><button class="small" id="qclr">Clear</button></div>' : `<p class="note">Empty. Tap + Next on a chapter to play it after this one.</p>`}</details>` : '';
     main.innerHTML = `${now}${upn}<div class="card"><h2>Listen</h2><p class="note">${ix ? `${(used / 1048576).toFixed(0)} MB on this device${upd ? ` · ${upd} chapter${upd > 1 ? 's' : ''} out of date` : ''}. Audio only downloads when you tap.` : 'No audio list yet. Tap Check (needs internet; a few KB).'}${L.checked ? '<br>Checked ' + new Date(L.checked).toLocaleString() : ''}${L.msg ? '<br>' + esc(L.msg) : ''}</p><div class="row"><button id="achk">Check for updates</button>${stl.length > 1 ? `<button id="aupall" class="updb">Update all ${stl.length}</button>` : ''}</div>${stl.map(({ b, c }) => { const f = esc(c.file); return `<div class="arow"><b>${esc(c.title)}</b><small>${esc(b.title)} · ${(c.size / 1048576).toFixed(0)} MB<span class="upd">● New version</span></small><span class="abtn">${dlOn === c.file ? '<button class="small" disabled>Downloading…</button>' : dlq.includes(c.file) ? `<button class="small" data-aq="${f}">Queued ✕</button>` : `<button class="small updb" data-ad="${f}">Update</button>`}</span></div>`; }).join('')}<div class="prog" id="aprog">${esc(dlErr)}</div></div><div class="card afind"><input type="search" id="asq" placeholder="Search chapters" value="${esc(aqry)}" autocomplete="off"><div class="seg">${[['all', 'All'], ['dev', 'On device'], ['prog', 'Started']].map(([k, t]) => `<button class="small${(L.af || 'all') === k ? ' on' : ''}" data-af="${k}">${t}</button>`).join('')}</div></div><div id="alib">${lib()}</div>`;
     if ($('#aupall')) $('#aupall').onclick = () => { dlErr = ''; stl.forEach(({ c }) => { if (dlOn !== c.file && !dlq.includes(c.file)) dlq.push(c.file); }); dlRun(); draw(); };
     $('#achk').onclick = async () => { $('#achk').textContent = 'Checking…'; ix = await audIndex(true); draw(); };
