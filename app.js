@@ -16,7 +16,7 @@ const kvSet = (k, v) => new Promise((res, rej) => { const t = idb.transaction('k
 
 let deck = { meta: {}, cards: [] }, events = [], settings = { newPerDay: 15, checkDate: '', hideDrafts: false, device: '', deck: 'mine', hideDups: true, refDark: 'auto' };
 let S = null; // study session
-const APP = 'v37';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
+const APP = 'v38';                              // shown in Settings → Progress; bump with sw.js so a device can be checked
 // paused sessions survive closing the app: { study: {...}, quiz: { topic: {...} } }, saved after every answer
 let sessions = { study: null, quiz: {} };
 const REDO = ' · missed';                       // a missed-only drill is saved beside its quiz
@@ -1003,7 +1003,8 @@ async function loadCaps(c) {
   }
   if (playing?.file !== want) return;
   const out = [];
-  for (const [t, d, text] of got.rows) {
+  for (const [t, d, text, card] of got.rows) {
+    if (card) { out.push([t, t + d, card]); continue; }   // speed cards: the whole card at once, question, answer, source (B, 2026-11-03)
     const words = text.split(/\s+/), parts = []; let cur = '';
     for (const w of words) { if (cur && (cur + ' ' + w).length > 80) { parts.push(cur); cur = w; } else cur = cur ? cur + ' ' + w : w; if (/[.?!:;]$/.test(cur) && cur.length > 45) { parts.push(cur); cur = ''; } }
     if (cur) parts.push(cur);
@@ -1040,7 +1041,9 @@ function paintNow() {
   const r = LS().rate || 1;                            // times shown at the playing speed: a 60 min chapter at 1.5× reads 40 min
   el.querySelector('.nc').textContent = `${clock(player.currentTime / r)} / ${clock((player.duration || playing.dur) / r)}${r !== 1 ? ` at ${r}×` : ''}`;
   el.querySelector('#npp').textContent = player.paused ? '▶︎' : '⏸';
-  const cp = $('#cap'); if (cp) { const on = LS().cc !== false && caps?.length; cp.hidden = !on; if (on) { const x = capAt(player.currentTime); if (cp.textContent !== x) cp.textContent = x; } }
+  const cp = $('#cap'); if (cp) { const on = LS().cc !== false && caps?.length; cp.hidden = !on; if (on) { const x = capAt(player.currentTime);
+    if (typeof x === 'object') { if (cp._card !== x) { cp._card = x; cp.classList.add('capcard'); cp.innerHTML = `<div class="cq">${esc(x.q)}</div><div class="ca">${esc(x.a)}</div><div class="cs">${esc(x.s)}</div>`; } }
+    else if (cp._card || cp.textContent !== x) { cp._card = null; cp.classList.remove('capcard'); cp.textContent = x; } } }
   const u = $('#upleft'); if (u) u.textContent = mins(((player.duration || playing.dur) - player.currentTime + upQDur) / r) + ' left';   // this chapter's rest + Up next
   el.querySelector('input[type=range]').value = player.currentTime / (player.duration || playing.dur) * 1000 || 0;
 }
